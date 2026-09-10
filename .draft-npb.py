@@ -461,14 +461,18 @@ if df_raw is not None:
     # ★ 思考方針アルゴリズム：
     # 1. 1位・2位はB+以上（基礎スコア80点以上）優先
     # 2. ポジション減衰ルール：
-    #    - 投手：1人指名ごとに初期係数「-0.075」累積減衰
-    #    - 捕手：1人でも指名した時点で捕手係数はすべて「0.88」固定
+    #    - 投手：1人指名ごとに-0.075累積減衰
+    #    - 捕手：1人でも指名したら捕手係数はすべて「0.88」固定
     #    - 内野手：1人指名で-0.10、2人指名で-0.25、3人以上指名で-0.35
     #    - 外野手：1人指名で-0.10、2人指名で-0.25、3人以上指名で-0.35
     # 3. 3位以降：未指名ポジション（投・捕・内・外）は係数1.05倍
     # 4. 4位以降：独立リーグ選手は係数1.10倍
-    # 5. 1位指名時：10点以内候補ありならトップ6/10、他全候補4/10。いなければ重複回避（最高評価なら7:3で次点）
-    # 6. 2位以下の指名時：トップ7/10、次点〜8番目3/10
+    # 5. 【★最新・1位限定重複回避システム】：
+    #    - 1番手（計算値トップ）：5/10 (50%)
+    #    - 2番手：3/10 (30%)
+    #    - 3番手：1/10 (10%)
+    #    - 4番手〜6番手：残りの1/10 (10%) を均等割り
+    # 6. 2位以下の指名時（従来どおり）：トップ7/10、次点〜8番目3/10
     def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
@@ -498,10 +502,8 @@ if df_raw is not None:
             
             # ポジション別減衰計算
             if m_pos == "投":
-                # 投手は1人指名ごとに -0.075 減衰
                 base_coeff -= (picked_counts["投"] * 0.075)
             elif m_pos == "捕":
-                # 捕手は1人でも指名したら 0.88 固定
                 if picked_counts["捕"] >= 1:
                     base_coeff = 0.88
             elif m_pos == "内":
@@ -539,30 +541,51 @@ if df_raw is not None:
         target_pool["score"] = target_pool.apply(calc_score, axis=1)
         target_pool = target_pool.sort_values(by="score", ascending=False).reset_index(drop=True)
 
-        top_player = target_pool.iloc[0]["氏名"]
-        max_score = target_pool.iloc[0]["score"]
-
-        # 1位指名
+        # ==========================================
+        # 【一巡目限定：新・重複回避システム】
+        # 1番手: 50%, 2番手: 30%, 3番手: 10%, 4〜6番手: 10%
+        # ==========================================
         if round_num == 1:
-            cands_within_10 = target_pool[(target_pool["score"] >= max_score - 10.0) & (target_pool["氏名"] != top_player)]
+            n_pool = len(target_pool)
+            if n_pool == 1:
+                return target_pool.iloc[0]["氏名"]
 
-            if len(cands_within_10) > 0:
-                if random.random() < 0.60:
-                    return top_player
+            rand_val = random.random()  # 0.0 〜 1.0
+
+            # 1番手: 5/10 (0.00 〜 0.50)
+            if rand_val < 0.50:
+                return target_pool.iloc[0]["氏名"]
+            
+            # 2番手: 3/10 (0.50 〜 0.80)
+            elif rand_val < 0.80:
+                return target_pool.iloc[1]["氏名"]
+            
+            # 3番手: 1/10 (0.80 〜 0.90)
+            elif rand_val < 0.90:
+                if n_pool >= 3:
+                    return target_pool.iloc[2]["氏名"]
                 else:
-                    return cands_within_10.sample(n=1).iloc[0]["氏名"]
+                    return target_pool.iloc[1]["氏名"]
+            
+            # 4番手〜6番手: 残りの1/10 (0.90 〜 1.00) を均等割り
             else:
-                if len(target_pool) >= 2:
-                    highest_base = pool_df["基礎スコア"].max()
-                    top_base = target_pool.iloc[0]["基礎スコア"]
-                    
-                    if top_base >= highest_base:
-                        runner_up = target_pool.iloc[1]["氏名"]
-                        if random.random() < 0.30:
-                            return runner_up
-                return top_player
-        # 2位以下
+                if n_pool >= 6:
+                    group_4_6 = target_pool.iloc[3:6]
+                    return group_4_6.sample(n=1).iloc[0]["氏名"]
+                elif n_pool >= 4:
+                    group_rem = target_pool.iloc[3:n_pool]
+                    return group_rem.sample(n=1).iloc[0]["氏名"]
+                elif n_pool >= 3:
+                    return target_pool.iloc[2]["氏名"]
+                else:
+                    return target_pool.iloc[1]["氏名"]
+
+        # ==========================================
+        # 【2巡目以降：従来どおり】
+        # トップ: 70%, 次点〜8番目: 30%
+        # ==========================================
         else:
+            top_player = target_pool.iloc[0]["氏名"]
             sub_cands = target_pool.iloc[1:8]
             if len(sub_cands) > 0:
                 if random.random() < 0.70:
