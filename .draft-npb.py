@@ -8,7 +8,7 @@ st.set_page_config(
     layout="centered"
 )
 
-# --- 1. スタイル定義（ボタンの文字色・背景の衝突を完全解消） ---
+# --- 1. スタイル定義（視認性とコントラストの完全固定） ---
 st.markdown("""<style>
 /* ベース背景 */
 html, body, [data-testid="stAppViewContainer"], .stApp {
@@ -22,8 +22,7 @@ h1, h2, h3, h4, h5, h6,
     color: #111827 !important;
 }
 
-/* ★ ボタンの中の文字は背景色に合わせてくっきり表示 */
-/* プライマリボタン（赤・テーマ色）: 白文字 */
+/* プライマリボタン（赤）: 白文字 */
 button[kind="primary"], button[data-testid="baseButton-primary"] {
     background-color: #a91e2c !important;
     border-color: #a91e2c !important;
@@ -33,7 +32,7 @@ button[kind="primary"] *, button[data-testid="baseButton-primary"] * {
     font-weight: 700 !important;
 }
 
-/* セカンダリボタン（通常ボタン）: 白背景に黒文字、または濃い背景なら白文字 */
+/* セカンダリボタン: 白背景に黒文字 */
 button[kind="secondary"], button[data-testid="baseButton-secondary"] {
     background-color: #ffffff !important;
     border: 1px solid #d1d5db !important;
@@ -46,16 +45,6 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
 /* スライダーラベル・数値 */
 [data-testid="stSlider"] label, [data-testid="stSlider"] div {
     color: #111827 !important;
-}
-
-/* タブの文字 */
-button[data-baseweb="tab"] div {
-    color: #4b5563 !important;
-    font-weight: 700 !important;
-}
-button[data-baseweb="tab"][aria-selected="true"] div {
-    color: #a91e2c !important;
-    font-weight: 800 !important;
 }
 
 /* 上部カード */
@@ -331,7 +320,7 @@ if df_raw is not None:
         st.markdown("## ⚙️ ドラフト初期設定")
         st.write("操作球団、指名人数、各球団の好みを設定します。")
 
-        # 1. 担当球団の選択（モバイルでも崩れないセレクトボックス方式）
+        # 1. 担当球団の選択
         st.markdown("### 1. 操作する球団を選ぶ")
         selected_user_team = st.selectbox(
             "あなたの担当球団",
@@ -353,31 +342,35 @@ if df_raw is not None:
 
         st.divider()
 
-        # 3. 12球団の係数設定
+        # 3. 12球団の係数設定（ドロップダウン選択式で視認性・操作性100%確保）
         st.markdown("### 3. 各球団のカテゴリ別係数設定")
-        t_tabs = st.tabs(npb_teams)
-        for i, t in enumerate(npb_teams):
-            with t_tabs[i]:
-                st.write(f"**{t} の補正係数**")
-                w = st.session_state.team_weights[t]
-                
-                c1, c2, c3, c4 = st.columns(4)
-                w["高投"] = c1.slider("高投", 0.0, 2.0, w["高投"], 0.1, key=f"s_{t}_高投")
-                w["高捕"] = c2.slider("高捕", 0.0, 2.0, w["高捕"], 0.1, key=f"s_{t}_高捕")
-                w["高内"] = c3.slider("高内", 0.0, 2.0, w["高内"], 0.1, key=f"s_{t}_高内")
-                w["高外"] = c4.slider("高外", 0.0, 2.0, w["高外"], 0.1, key=f"s_{t}_高外")
+        edit_team = st.selectbox(
+            "係数を調整する球団を選択",
+            npb_teams,
+            index=npb_teams.index(st.session_state.user_team),
+            key="tune_team_select"
+        )
+        
+        st.write(f"**{edit_team} の補正係数** （スライダーで好みを設定）")
+        w = st.session_state.team_weights[edit_team]
+        
+        c1, c2, c3, c4 = st.columns(4)
+        w["高投"] = c1.slider("高投", 0.0, 2.0, w["高投"], 0.1, key=f"s_{edit_team}_高投")
+        w["高捕"] = c2.slider("高捕", 0.0, 2.0, w["高捕"], 0.1, key=f"s_{edit_team}_高捕")
+        w["高内"] = c3.slider("高内", 0.0, 2.0, w["高内"], 0.1, key=f"s_{edit_team}_高内")
+        w["高外"] = c4.slider("高外", 0.0, 2.0, w["高外"], 0.1, key=f"s_{edit_team}_高外")
 
-                c5, c6, c7, c8 = st.columns(4)
-                w["大投"] = c5.slider("大投", 0.0, 2.0, w["大投"], 0.1, key=f"s_{t}_大投")
-                w["大捕"] = c6.slider("大捕", 0.0, 2.0, w["大捕"], 0.1, key=f"s_{t}_大捕")
-                w["大内"] = c7.slider("大内", 0.0, 2.0, w["大内"], 0.1, key=f"s_{t}_大内")
-                w["大外"] = c8.slider("大外", 0.0, 2.0, w["大外"], 0.1, key=f"s_{t}_大外")
+        c5, c6, c7, c8 = st.columns(4)
+        w["大投"] = c5.slider("大投", 0.0, 2.0, w["大投"], 0.1, key=f"s_{edit_team}_大投")
+        w["大捕"] = c6.slider("大捕", 0.0, 2.0, w["大捕"], 0.1, key=f"s_{edit_team}_大捕")
+        w["大内"] = c7.slider("大内", 0.0, 2.0, w["大内"], 0.1, key=f"s_{edit_team}_大内")
+        w["大外"] = c8.slider("大外", 0.0, 2.0, w["大外"], 0.1, key=f"s_{edit_team}_大外")
 
-                c9, c10, c11, c12 = st.columns(4)
-                w["社投"] = c9.slider("社投", 0.0, 2.0, w["社投"], 0.1, key=f"s_{t}_社投")
-                w["社捕"] = c10.slider("社捕", 0.0, 2.0, w["社捕"], 0.1, key=f"s_{t}_社捕")
-                w["社内"] = c11.slider("社内", 0.0, 2.0, w["社内"], 0.1, key=f"s_{t}_社内")
-                w["社外"] = c12.slider("社外", 0.0, 2.0, w["社外"], 0.1, key=f"s_{t}_社外")
+        c9, c10, c11, c12 = st.columns(4)
+        w["社投"] = c9.slider("社投", 0.0, 2.0, w["社投"], 0.1, key=f"s_{edit_team}_社投")
+        w["社捕"] = c10.slider("社捕", 0.0, 2.0, w["社捕"], 0.1, key=f"s_{edit_team}_社捕")
+        w["社内"] = c11.slider("社内", 0.0, 2.0, w["社内"], 0.1, key=f"s_{edit_team}_社内")
+        w["社外"] = c12.slider("社外", 0.0, 2.0, w["社外"], 0.1, key=f"s_{edit_team}_社外")
 
         st.write("")
         if st.button("🏟️ この設定でドラフト会議会場へ進む", type="primary", use_container_width=True):
