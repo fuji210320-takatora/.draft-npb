@@ -414,6 +414,7 @@ if df_raw is not None:
 
     df["メイン守備"] = df["守備位置"].apply(get_main_pos)
     df["カテゴリ"] = df.apply(get_cat, axis=1)
+    
 score_dict = {
     "S": 97,
     "A+": 93,
@@ -438,7 +439,7 @@ def parse_score(val):
     return float(score_dict.get(s, 50.0))
 
 
-df["基礎スコア"] = df["評価"].apply(parse_score)
+    df["基礎スコア"] = df["評価"].apply(parse_score)
 
     player_dict = {}
     for _, r in df.iterrows():
