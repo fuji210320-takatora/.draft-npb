@@ -415,7 +415,6 @@ if df_raw is not None:
     df["メイン守備"] = df["守備位置"].apply(get_main_pos)
     df["カテゴリ"] = df.apply(get_cat, axis=1)
 
-    # 評価スコア配点
     score_dict = {
         "S": 97,
         "A+": 93,
@@ -460,10 +459,14 @@ if df_raw is not None:
 
     # ★ 思考方針アルゴリズム：
     # 1. 1位・2位はB+以上（基礎スコア80点以上）優先
-    # 2. ポジションバランス（3位以降）：未指名メイン守備（投・捕・内・外）は係数1.05倍
-    # 3. 4位以降：独立リーグ選手（独投・独捕・独内・独外）は係数1.1倍
-    # 4. 1位指名時：10点以内候補ありならトップ6/10、他全候補4/10。いなければ重複回避（最高アルファベット評価なら7:3で次点）
-    # 5. 2位以下の指名時：トップ7/10、次点〜8番目3/10
+    # 2. ポジション減衰ルール：
+    #    - 捕手を1人でも指名済みの球団：捕手係数はすべて「0.88」固定
+    #    - 内野手：1人指名で-0.10、2人指名で-0.25、3人以上指名で-0.35
+    #    - 外野手：1人指名で-0.10、2人指名で-0.25、3人以上指名で-0.35
+    # 3. 3位以降：未指名ポジション（投・捕・内・外）は係数1.05倍
+    # 4. 4位以降：独立リーグ選手は係数1.10倍
+    # 5. 1位指名時：10点以内候補ありならトップ6/10、他全候補4/10。いなければ重複回避（最高評価なら7:3で次点）
+    # 6. 2位以下の指名時：トップ7/10、次点〜8番目3/10
     def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
@@ -477,25 +480,55 @@ if df_raw is not None:
 
         w = st.session_state.team_weights[team_name]
         
-        already_positions = set()
-        if round_num >= 3:
-            for r in range(1, round_num):
-                picked_p = st.session_state.draft_picks[team_name].get(r)
-                if picked_p and picked_p in player_dict:
-                    already_positions.add(player_dict[picked_p]["main_pos"])
+        # 獲得済み選手のポジション別カウント
+        picked_counts = {"投": 0, "捕": 0, "内": 0, "外": 0}
+        for r in range(1, round_num):
+            picked_p = st.session_state.draft_picks[team_name].get(r)
+            if picked_p and picked_p in player_dict:
+                m_pos = player_dict[picked_p]["main_pos"]
+                if m_pos in picked_counts:
+                    picked_counts[m_pos] += 1
 
         def calc_score(row):
-            base = row["基礎スコア"] * w.get(row["カテゴリ"], 1.0)
+            m_pos = row["メイン守備"]
+            cat = row["カテゴリ"]
+            base_coeff = w.get(cat, 1.0)
             
+            # ポジション減衰
+            if m_pos == "捕":
+                if picked_counts["捕"] >= 1:
+                    base_coeff = 0.88
+            elif m_pos == "内":
+                cnt = picked_counts["内"]
+                if cnt == 1:
+                    base_coeff -= 0.10
+                elif cnt == 2:
+                    base_coeff -= 0.25
+                elif cnt >= 3:
+                    base_coeff -= 0.35
+            elif m_pos == "外":
+                cnt = picked_counts["外"]
+                if cnt == 1:
+                    base_coeff -= 0.10
+                elif cnt == 2:
+                    base_coeff -= 0.25
+                elif cnt >= 3:
+                    base_coeff -= 0.35
+
+            base_coeff = max(base_coeff, 0.1)  # 負値防止
+            score = row["基礎スコア"] * base_coeff
+            
+            # 3位以降：未指名ポジションなら1.05倍
             if round_num >= 3:
-                if row["メイン守備"] in ["投", "捕", "内", "外"] and (row["メイン守備"] not in already_positions):
-                    base *= 1.05
+                if m_pos in ["投", "捕", "内", "外"] and (picked_counts[m_pos] == 0):
+                    score *= 1.05
                     
+            # 4位以降：独立リーグ選手なら1.10倍
             if round_num >= 4:
-                if str(row["カテゴリ"]).startswith("独") or ("独" in str(row["区分"])):
-                    base *= 1.10
+                if str(cat).startswith("独") or ("独" in str(row["区分"])):
+                    score *= 1.10
                     
-            return base
+            return score
 
         target_pool["score"] = target_pool.apply(calc_score, axis=1)
         target_pool = target_pool.sort_values(by="score", ascending=False).reset_index(drop=True)
@@ -577,7 +610,7 @@ if df_raw is not None:
 
         st.divider()
 
-        # 3. 12球団の係数設定（プルダウンでスライダーの表示/非表示を切り替え）
+        # 3. 12球団の係数設定
         st.markdown("### 3. 各球団のカテゴリ別係数設定")
         
         slider_mode = st.selectbox(
