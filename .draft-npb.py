@@ -141,8 +141,7 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
     color: #ffffff !important;
     border-radius: 8px 8px 0 0 !important;
     padding: 10px 16px !important;
-    display: flex !important;
-    align-items: center !important;
+    display: flex !align-items: center;
     justify-content: space-between !important;
     font-weight: 700 !important;
     font-size: 14px !important;
@@ -429,10 +428,13 @@ if df_raw is not None:
         return name
 
     # ★ 思考方針アルゴリズム：
-    # 1. 1位・2位はB+以上優先（枯渇時は全体）
-    # 2. ポジションバランス（3位以降）：チームがまだ指名していないメイン守備（投・捕・内・外）の選手は係数1.05倍！
-    # 3. 5点以内候補群からランダム選出
-    # 4. 重複回避（1位）：プール内最高アルファベット評価の選手を指名しようとした場合、次点（2位候補）と「7 : 3」で抽選！
+    # 1. 1位・2位はB+以上優先（枯渇時は全体開放）
+    # 2. ポジションバランス（3位以降）：まだ指名していないメイン守備（投・捕・内・外）は係数1.05倍
+    # 3. 1位指名時：
+    #    - 最高スコアから10点以内の選手がいる場合: トップ6/10 (60%) : 10点以内の他全選手4/10 (40%)
+    #    - 10点以内にいない場合: 重複回避（最高アルファベット評価ならトップ 70% : 次点 30%）
+    # 4. 2位以下の指名時：
+    #    - トップ7/10 (70%) : 次点〜8番目の候補たち3/10 (30%)
     def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
@@ -447,7 +449,7 @@ if df_raw is not None:
 
         w = st.session_state.team_weights[team_name]
         
-        # 3位以降：ポジションバランス（まだ指名していないポジションの選手を1.05倍）
+        # 3位以降のポジションバランス
         already_positions = set()
         if round_num >= 3:
             for r in range(1, round_num):
@@ -458,7 +460,6 @@ if df_raw is not None:
         def calc_score(row):
             base = row["基礎スコア"] * w.get(row["カテゴリ"], 1.0)
             if round_num >= 3:
-                # 投・捕・内・外の主要ポジションで未指名なら1.05倍
                 if row["メイン守備"] in ["投", "捕", "内", "外"] and (row["メイン守備"] not in already_positions):
                     base *= 1.05
             return base
@@ -466,28 +467,50 @@ if df_raw is not None:
         target_pool["score"] = target_pool.apply(calc_score, axis=1)
         target_pool = target_pool.sort_values(by="score", ascending=False).reset_index(drop=True)
 
-        max_score = target_pool["score"].max()
-        top_cands = target_pool[target_pool["score"] >= (max_score - 5.0)]
-        chosen_candidate = top_cands.sample(n=1).iloc[0]
-        chosen_name = chosen_candidate["氏名"]
+        top_player = target_pool.iloc[0]["氏名"]
+        max_score = target_pool.iloc[0]["score"]
 
-        # 1位入札時の「重複回避」ロジック
-        if round_num == 1 and len(target_pool) >= 2:
-            # 現在残っているプール内での最高ランク（S, A, A-, B+...）を特定
-            highest_base_score = pool_df["基礎スコア"].max()
-            chosen_base_score = chosen_candidate["基礎スコア"]
+        # ========================
+        # 【1位指名の思考ロジック】
+        # ========================
+        if round_num == 1:
+            # 10点以内の他候補を抽出
+            cands_within_10 = target_pool[(target_pool["score"] >= max_score - 10.0) & (target_pool["氏名"] != top_player)]
+
+            if len(cands_within_10) > 0:
+                # 10点以内に候補がいる場合：トップに6/10、それ以外の全候補に4/10
+                if random.random() < 0.60:
+                    return top_player
+                else:
+                    return cands_within_10.sample(n=1).iloc[0]["氏名"]
+            else:
+                # 10点以内に候補がいない場合：重複回避機能
+                if len(target_pool) >= 2:
+                    highest_base = pool_df["基礎スコア"].max()
+                    top_base = target_pool.iloc[0]["基礎スコア"]
+                    
+                    if top_base >= highest_base:
+                        # 最高アルファベット評価の選手なら、7:3で次点と抽選
+                        runner_up = target_pool.iloc[1]["氏名"]
+                        if random.random() < 0.30:
+                            return runner_up
+                return top_player
+
+        # ========================
+        # 【2位以下の思考ロジック】
+        # ========================
+        else:
+            # 次点〜8番目（最大7名）の候補群を抽出
+            sub_cands = target_pool.iloc[1:8]
             
-            # 最高アルファベット評価の選手を指名しようとしている場合
-            if chosen_base_score >= highest_base_score:
-                # 次点の選手（チーム内スコア順で本命と異なる選手）
-                other_cands = target_pool[target_pool["氏名"] != chosen_name]
-                if len(other_cands) > 0:
-                    runner_up_name = other_cands.iloc[0]["氏名"]
-                    # 本命 70% : 次点（回避） 30% で抽選
-                    if random.random() < 0.30:
-                        chosen_name = runner_up_name
-
-        return chosen_name
+            if len(sub_cands) > 0:
+                # トップに7/10 (70%)、次点〜8番目の候補たちに3/10 (30%)
+                if random.random() < 0.70:
+                    return top_player
+                else:
+                    return sub_cands.sample(n=1).iloc[0]["氏名"]
+            else:
+                return top_player
 
     # サイドバー切り替え
     screen_choice = st.sidebar.radio(
@@ -821,7 +844,6 @@ if df_raw is not None:
             if w_idx < len(order):
                 now_team = order[w_idx]
 
-                # ユーザー球団の番：ピタッと止まって入力待ち
                 if now_team == user_team:
                     st.markdown(f"#### 🎯 選択権： **{now_team}（あなた）** （第{c_rnd}巡目 第{w_idx+1}指名）")
                     rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
@@ -852,7 +874,6 @@ if df_raw is not None:
                             st.session_state.weber_index += 1
                             st.rerun()
 
-                # 他球団の番：指定速度でウェーバー順に自動シーケンス進行
                 else:
                     st.info(f"🎙️ 第{c_rnd}巡目 第{w_idx+1}指名: **{now_team}** の指名進行中……")
                     
@@ -868,7 +889,6 @@ if df_raw is not None:
                     st.rerun()
 
             else:
-                # 当該巡目が終了
                 st.success(f"🎉 第{c_rnd}巡目の指名がすべて終了しました！")
                 if c_rnd < max_r:
                     if st.button(f"➡️ 第{c_rnd+1}巡目の指名を開始する", type="primary", use_container_width=True):
