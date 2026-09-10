@@ -7,7 +7,7 @@ st.set_page_config(
     page_title="プロ野球ドラフト会議シミュレーター", page_icon="⚾", layout="wide"
 )
 
-st.title("⚾ プロ野球ドラフト会議シミュレーター")
+st.title("⚾ プロ野球ドラフト会議シミュレーター（完全対話型）")
 
 # --- 1. データの読み込み ---
 SHEET_ID = "1Qd_GNT-V0Ololma_QpIAhgEzLSFXlsv8sMG99espI90"
@@ -67,14 +67,67 @@ if df_raw is not None:
   if "user_team" not in st.session_state:
     st.session_state.user_team = "阪神"
 
-  # ドラフトの進行ステージ管理 ("config", "round1_done", "round2")
-  if "draft_stage" not in st.session_state:
-    st.session_state.draft_stage = "config"
-    st.session_state.round1_results = {}
-    st.session_state.round2_results = {}
-    st.session_state.lottery_logs = []
+  # ドラフト進行管理の状態変数
+  # stage: "config" (設定), "r1_bid" (1位入札選択), "r1_lottery" (抽選結果確認),
+  #        "r1_hature_user" (自チーム外れ1位選択), "round_in_progress" (2巡目以降の進行)
+  if "draft_state" not in st.session_state:
+    st.session_state.draft_state = "config"
+    st.session_state.draft_results = {}  # {球団名: {1: 選手名, 2: 選手名, ...}}
+    st.session_state.already_drafted = set()
+    st.session_state.current_round = 1
+    st.session_state.pending_losers = []
+    st.session_state.temp_r1_picks = {}
 
-  # --- 2. 画面の切り替え ---
+  # --- データの基礎加工 ---
+  df = df_raw.copy()
+
+
+  def get_category_key(row):
+    kbn = str(row["区分"])
+    pos = str(row["守備位置"])
+    prefix = "他"
+    if "高" in kbn:
+      prefix = "高"
+    elif "大" in kbn:
+      prefix = "大"
+    elif "社会人" in kbn or "社" in kbn or "独立" in kbn or "クラブ" in kbn:
+      prefix = "社"
+
+    suffix = "他"
+    if "投" in pos:
+      suffix = "投"
+    elif "捕" in pos:
+      suffix = "捕"
+    elif "内" in pos:
+      suffix = "内"
+    elif "外" in pos:
+      suffix = "外"
+
+    key = prefix + suffix
+    return key if key in categories else "他"
+
+
+  df["カテゴリ"] = df.apply(get_category_key, axis=1)
+
+
+  def rank_to_score(rank):
+    score_map = {
+        "S": 97,
+        "A": 85,
+        "A-": 79,
+        "B+": 74,
+        "B": 70,
+        "B-": 66,
+        "C+": 60,
+        "C": 55,
+        "C-": 50,
+    }
+    return score_map.get(str(rank).strip(), 45)
+
+
+  df["基礎スコア"] = df["評価"].apply(rank_to_score)
+
+  # --- 画面切り替え ---
   app_mode = st.radio(
       "画面を選択",
       ["📋 1. 各球団の設定・チューニング", "🏟️ 2. ドラフト会議会場"],
@@ -101,7 +154,6 @@ if df_raw is not None:
           st.success(f"担当を「{team}」に変更しました！")
 
     st.divider()
-
     st.markdown("#### 🎛️ 12球団のカテゴリ別補正スライダー")
     team_tabs = st.tabs(npb_teams)
 
@@ -161,85 +213,50 @@ if df_raw is not None:
         f"現在の担当球団: **{user_team}** （設定画面からいつでも変更できます）"
     )
 
-    # データの加工
-    df = df_raw.copy()
+    # リセットボタン
+    if st.button("🔄 ドラフトを最初からやり直す"):
+      st.session_state.draft_state = "config"
+      st.session_state.draft_results = {}
+      st.session_state.already_drafted = set()
+      st.session_state.current_round = 1
+      st.session_state.pending_losers = []
+      st.session_state.temp_r1_picks = {}
+      st.rerun()
 
+    st.divider()
 
-    def get_category_key(row):
-      kbn = str(row["区分"])
-      pos = str(row["守備位置"])
-      prefix = "他"
-      if "高" in kbn:
-        prefix = "高"
-      elif "大" in kbn:
-        prefix = "大"
-      elif "社会人" in kbn or "社" in kbn or "独立" in kbn or "クラブ" in kbn:
-        prefix = "社"
+    # ------------------------------------------
+    # ステップ A: 1位指名 入札
+    # ------------------------------------------
+    if st.session_state.draft_state == "config":
+      st.subheader("📝 ドラフト 1位指名入札")
+      st.write("あなたが操作する球団の1位入札選手を選んでください。")
 
-      suffix = "他"
-      if "投" in pos:
-        suffix = "投"
-      elif "捕" in pos:
-        suffix = "捕"
-      elif "内" in pos:
-        suffix = "内"
-      elif "外" in pos:
-        suffix = "外"
+      available_df = df[~df["氏名"].isin(st.session_state.already_drafted)]
+      default_sorted = available_df.sort_values(by="基礎スコア", ascending=False)
 
-      key = prefix + suffix
-      return key if key in categories else "他"
-
-
-    df["カテゴリ"] = df.apply(get_category_key, axis=1)
-
-
-    def rank_to_score(rank):
-      score_map = {
-          "S": 97,
-          "A": 85,
-          "A-": 79,
-          "B+": 74,
-          "B": 70,
-          "B-": 66,
-          "C+": 60,
-          "C": 55,
-          "C-": 50,
-      }
-      return score_map.get(str(rank).strip(), 45)
-
-
-    df["基礎スコア"] = df["評価"].apply(rank_to_score)
-
-    # --- ステップ1: 1位指名入札フェーズ ---
-    if st.session_state.draft_stage == "config":
-      st.subheader("📝 プロ野球ドラフト会議：1位指名 入札")
-      st.write("各球団が1位指名する選手に入札します。競合した場合は抽選を行います。")
-
-      default_sorted = df.sort_values(by="基礎スコア", ascending=False)
       user_choice = st.selectbox(
-          f"{user_team}で1位入札する選手を選ぶ",
-          default_sorted["氏名"].tolist(),
+          f"{user_team}の1位入札選手", default_sorted["氏名"].tolist()
       )
 
-      if st.button("🔔 1位入札を確定して抽選を行う", type="primary"):
-        # 各球団の入札
-        bids = {}
+      if st.button("🔔 1位入札を確定する（AI球団の入札・抽選へ）", type="primary"):
+        # AI球団の入札先決定
+        bids = {user_team: user_choice}
         for team in npb_teams:
           if team == user_team:
-            bids[team] = user_choice
+            continue
+          t_weights = st.session_state.team_weights[team]
+          temp_df = available_df.copy()
+          temp_df["球団別スコア"] = temp_df["基礎スコア"] * temp_df[
+              "カテゴリ"
+          ].map(t_weights)
+          top_cands = temp_df.sort_values(by="球団別スコア", ascending=False).head(
+              5
+          )
+          if len(top_cands) > 0:
+            bids[team] = top_cands.sample(n=1).iloc[0]["氏名"]
           else:
-            t_weights = st.session_state.team_weights[team]
-            temp_df = df.copy()
-            temp_df["球団別スコア"] = temp_df["基礎スコア"] * temp_df[
-                "カテゴリ"
-            ].map(t_weights)
-            top_candidates = temp_df.sort_values(
-                by="球団別スコア", ascending=False
-            ).head(5)
-            if len(top_candidates) > 0:
-              bids[team] = top_candidates.sample(n=1).iloc[0]["氏名"]
-            else:
-              bids[team] = temp_df.iloc[0]["氏名"]
+            bids[team] = available_df.iloc[0]["氏名"]
 
         # 競合集計
         player_bids = {}
@@ -248,21 +265,20 @@ if df_raw is not None:
             player_bids[player] = []
           player_bids[player].append(team)
 
-        confirmed_picks = {}
+        confirmed_1st = {}
         loser_teams = []
-        logs = []
+        logs = ["### 【1位入札・抽選結果】"]
 
-        logs.append("### 【1位入札・抽選結果】")
         for player, competing_teams in player_bids.items():
           if len(competing_teams) == 1:
             winner = competing_teams[0]
-            confirmed_picks[player] = winner
+            confirmed_1st[player] = winner
             logs.append(
                 f"- **{player}**: **{winner}** が単独指名で交渉権獲得！"
             )
           else:
             winner = random.choice(competing_teams)
-            confirmed_picks[player] = winner
+            confirmed_1st[player] = winner
             losers = [t for t in competing_teams if t != winner]
             loser_teams.extend(losers)
             losers_str = ", ".join(losers)
@@ -270,141 +286,237 @@ if df_raw is not None:
                 f"- 🔥 **{player}** ({len(competing_teams)}球団競合): 抽選の結果、**{winner}** が交渉権獲得！（外れ: {losers_str}）"
             )
 
-        # 外れ1位の処理
-        remaining_pool = df[~df["氏名"].isin(confirmed_picks.keys())].copy()
-        logs.append("\n### 【外れ1位 指名結果】")
-        for team in loser_teams:
-          if len(remaining_pool) > 0:
-            t_weights = st.session_state.team_weights[team]
-            remaining_pool["スコア"] = remaining_pool[
-                "基礎スコア"
-            ] * remaining_pool["カテゴリ"].map(t_weights)
-            remaining_pool = remaining_pool.sort_values(
-                by="スコア", ascending=False
-            ).reset_index(drop=True)
-            top_n_pool = remaining_pool.head(5)
-            hature_player = top_n_pool.sample(n=1).iloc[0]["氏名"]
-            confirmed_picks[hature_player] = team
-            remaining_pool = remaining_pool[
-                remaining_pool["氏名"] != hature_player
-            ].reset_index(drop=True)
-            logs.append(f"- 🔄 **{team}**: **{hature_player}** を外れ1位指名")
+        st.session_state.temp_r1_picks = confirmed_1st
+        st.session_state.pending_losers = loser_teams
+        st.session_state.r1_logs = logs
 
-        # 結果をセッションに保存してステージを進める
-        st.session_state.round1_results = {
-            t: p for p, t in confirmed_picks.items()
-        }
-        st.session_state.lottery_logs = logs
-        st.session_state.draft_stage = "round1_done"
+        # もし自チームが抽選を外れていた場合、プレイヤーに外れ1位を選ばせるステップへ
+        if user_team in loser_teams:
+          st.session_state.draft_state = "r1_hature_user"
+        else:
+          # 自チームが単独または当たりを引いた場合、AIの外れ1位を自動処理して1位完了へ
+          process_ai_hature_1st(df, npb_teams)
+          st.session_state.draft_state = "r1_result_view"
         st.rerun()
 
-    # --- ステップ2: 1位結果発表 ＆ 2巡目へ進む ---
-    elif st.session_state.draft_stage == "round1_done":
-      st.subheader("🎯 第1回選択希望選手（1位指名）確定")
+    # ------------------------------------------
+    # ステップ B: プレイヤーの外れ1位選択
+    # ------------------------------------------
+    elif st.session_state.draft_state == "r1_hature_user":
+      st.subheader("🔄 1位指名 抽選外れ（外れ1位指名）")
+      st.warning(
+          f"残念ながら **{user_team}** は1位入札の抽選を外れました。外れ1位指名選手を選んでください。"
+      )
 
-      for log in st.session_state.lottery_logs:
+      # 既に確定している選手を除外
+      already_taken = list(st.session_state.temp_r1_picks.keys())
+      rem_df = df[~df["氏名"].isin(already_taken)]
+      rem_sorted = rem_df.sort_values(by="基礎スコア", ascending=False)
+
+      user_hature_choice = st.selectbox(
+          f"{user_team}の外れ1位指名選手", rem_sorted["氏名"].tolist()
+      )
+
+      if st.button("外れ1位指名を確定する", type="primary"):
+        # プレイヤーの指名を確定
+        st.session_state.temp_r1_picks[user_hature_choice] = user_team
+        st.session_state.pending_losers.remove(user_team)
+
+        # 残りのAIチームの外れ1位を自動処理
+        rem_pool = df[~df["氏名"].isin(st.session_state.temp_r1_picks.keys())].copy()
+        for team in st.session_state.pending_losers:
+          if len(rem_pool) > 0:
+            t_weights = st.session_state.team_weights[team]
+            rem_pool["スコア"] = rem_pool["基礎スコア"] * rem_pool["カテゴリ"].map(
+                t_weights
+            )
+            rem_pool = rem_pool.sort_values(
+                by="スコア", ascending=False
+            ).reset_index(drop=True)
+            top_n = rem_pool.head(5)
+            chosen = top_n.sample(n=1).iloc[0]["氏名"]
+            st.session_state.temp_r1_picks[chosen] = team
+            rem_pool = rem_pool[rem_pool["氏名"] != chosen].reset_index(drop=True)
+
+        # 1位結果を保存
+        for p, t in st.session_state.temp_r1_picks.items():
+          if t not in st.session_state.draft_results:
+            st.session_state.draft_results[t] = {}
+          st.session_state.draft_results[t][1] = p
+          st.session_state.already_drafted.add(p)
+
+        st.session_state.draft_state = "r1_result_view"
+        st.rerun()
+
+    # ------------------------------------------
+    # ステップ C: 1位結果確認 ＆ 2巡目以降へ進む
+    # ------------------------------------------
+    elif st.session_state.draft_state == "r1_result_view":
+      st.subheader("🏆 1位指名 確定結果")
+      for log in st.session_state.get("r1_logs", []):
         st.markdown(log)
 
+      st.markdown("#### 各球団の1位獲得選手")
+      r1_list = []
+      for t in npb_teams:
+        p = st.session_state.draft_results.get(t, {}).get(1, "不明")
+        r1_list.append({"球団": t, "1位指名": p})
+      st.dataframe(pd.DataFrame(r1_list), use_container_width=True, hide_index=True)
+
       st.divider()
-      if st.button("➡️ 2巡目（ウェーバー指名）に進む", type="primary"):
-        st.session_state.draft_stage = "round2_in_progress"
+      if st.button(
+          "➡️ 2巡目（ウェーバー指名）の自チーム指名へ進む", type="primary"
+      ):
+        st.session_state.current_round = 2
+        st.session_state.draft_state = "round_interactive"
         st.rerun()
 
-    # --- ステップ3: 2巡目（ウェーバー順）進行フェーズ ---
-    elif st.session_state.draft_stage in [
-        "round2_in_progress",
-        "draft_finished",
-    ]:
-      st.subheader("📝 ドラフト2巡目（ウェーバー指名）")
+    # ------------------------------------------
+    # ステップ D: 2巡目以降のインタラクティブ進行
+    # ------------------------------------------
+    elif st.session_state.draft_state == "round_interactive":
+      cur_round = st.session_state.current_round
+      st.subheader(f"📝 ドラフト 第 {cur_round} 巡目 指名")
 
-      # 2巡目のウェーバー順（実際のNPBに倣い、1位の逆順や固定順など）
-      weber_teams = list(reversed(npb_teams))
+      # ウェーバー順（奇数巡目: 正順、偶数巡目: 逆順など、ここではシンプルに奇数正順・偶数逆順）
+      if cur_round % 2 == 1:
+        order_teams = npb_teams
+      else:
+        order_teams = list(reversed(npb_teams))
 
-      # まだ2巡目指名が済んでいない場合、順番に処理
-      if st.session_state.draft_stage == "round2_in_progress":
-        # 1位までに取られた選手を除外したプール
-        already_picked = list(st.session_state.round1_results.values())
-        remaining_pool = df[~df["氏Name" if "氏Name" in df.columns else "氏名"].isin(already_picked)].copy() # 念のため
-        # 正しくは "氏名"
-        remaining_pool = df[~df["氏名"].isin(already_picked)].copy()
+      st.write(f"現在の指名順（ウェーバー）に基づき進行します。")
 
-        sec_results = {}
-        sec_logs = []
+      # まだこの巡目で指名していないチームを順番に処理していく
+      # プレイヤーの番が来たらセレクトボックスで止める
+      if "round_queue_idx" not in st.session_state:
+        st.session_state.round_queue_idx = 0
 
-        for team in weber_teams:
-          if len(remaining_pool) > 0:
-            t_weights = st.session_state.team_weights[team]
-            remaining_pool["スコア"] = remaining_pool[
-                "基礎スコ>ア"
-                if "基礎スコ>ア" in remaining_pool.columns
-                else "基礎スコア"
-            ] * remaining_pool["カテゴリ"].map(t_weights)
-            remaining_pool = remaining_pool.sort_values(
-                by="スコア", ascending=False
-            ).reset_index(drop=True)
+      queue_idx = st.session_state.round_queue_idx
 
-            top_n_pool = remaining_pool.head(3)
-            chosen = top_n_pool.sample(n=1).iloc[0]["氏名"]
-            sec_results[team] = chosen
-            remaining_pool = remaining_pool[
-                remaining_pool["氏名"] != chosen
-            ].reset_index(drop=True)
-            sec_logs.append(f"- **{team}**: **{chosen}** を指名")
+      if queue_idx < len(order_teams):
+        current_team = order_teams[queue_idx]
 
-        st.session_state.round2_results = sec_results
-        st.session_state.sec_logs = sec_logs
-        st.session_state.draft_stage = "draft_finished"
-        st.rerun()
-
-      # --- ステップ4: 最終結果発表 ---
-      if st.session_state.draft_stage == "draft_finished":
-        st.success("🎉 全日程のドラフト会議が終了しました！")
-
-        st.subheader("📜 2巡目 指名経過ログ")
-        for log in st.session_state.get("sec_logs", []):
-          st.markdown(log)
-
-        st.divider()
-        st.subheader("🏆 ドラフト指名 最終結果一覧（1位 ＆ 2巡目）")
-
-        final_summary = []
-        for team in npb_teams:
-          p1_name = st.session_state.round1_results.get(team, "不明")
-          p1_row = (
-              df[df["氏名"] == p1_name].iloc[0]
-              if p1_name in df["氏名"].values
-              else None
-          )
-
-          p2_name = st.session_state.round2_results.get(team, "指名漏れ")
-          p2_row = (
-              df[df["氏Name" if "氏Name" in df.columns else "氏名"] == p2_name].iloc[0]
-              if p2_name in df["氏名"].values
-              else None
-          )
-
-          final_summary.append({
-              "球団": f"★ {team} (あなた)" if team == user_team else team,
-              "1位 指名選手": p1_name,
-              "1位(区分/守備)": (
-                  f"{p1_row['区分']} / {p1_row['守備位置']}"
-                  if p1_row is not None
-                  else ""
-              ),
-              "2巡目 指名選手": p2_name,
-              "2巡目(区分/守備)": (
-                  f"{p2_row['区分']} / {p2_row['守備位置']}"
-                  if p2_row is not None
-                  else ""
-              ),
-          })
-
-        st.dataframe(
-            pd.DataFrame(final_summary),
-            use_container_width=True,
-            hide_index=True,
+        st.info(
+            f"現在進行中: **第 {cur_round} 巡目** — 指名権: **{current_team}**"
+            f" {'(あなた)' if current_team == user_team else ''}"
         )
 
-        if st.button("🔄 最初からやり直す"):
-          st.session_state.draft_stage = "config"
-          st.rerun()
+        # 残り選手プール
+        avail_df = df[~df["氏名"].isin(st.session_state.already_drafted)]
+
+        if current_team == user_team:
+          # --- プレイヤーの番 ---
+          st.write("あなたの球団の指名選手を選んでください。")
+          avail_sorted = avail_df.sort_values(by="基礎スコア", ascending=False)
+          user_pick_n = st.selectbox(
+              f"{user_team}の第{cur_round}巡目指名",
+              avail_sorted["氏名"].tolist(),
+              key=f"user_pick_r{cur_round}",
+          )
+
+          if st.button("この選手を指名する", type="primary"):
+            if current_team not in st.session_state.draft_results:
+              st.session_state.draft_results[current_team] = {}
+            st.session_state.draft_results[current_team][cur_round] = (
+                user_pick_n
+            )
+            st.session_state.already_drafted.add(user_pick_n)
+            st.session_state.round_queue_idx += 1
+            st.rerun()
+        else:
+          # --- AI球団の番（自動進行ボタン、またはサクサク進む） ---
+          st.write(
+              f"{current_team} が思考中……（「AIの指名を進める」ボタンを押してください）"
+          )
+          if st.button(
+              f"{current_team} の指名を進める", key=f"ai_btn_{queue_idx}"
+          ):
+            t_weights = st.session_state.team_weights[current_team]
+            temp_df = avail_df.copy()
+            temp_df["球団別スコア"] = temp_df["基礎スコア"] * temp_df[
+                "カテゴリ"
+            ].map(t_weights)
+            top_cands = temp_df.sort_values(
+                by="球団別スコア", ascending=False
+            ).head(3)
+
+            if len(top_cands) > 0:
+              chosen = top_cands.sample(n=1).iloc[0]["氏名"]
+            else:
+              chosen = avail_df.iloc[0]["氏名"]
+
+            if current_team not in st.session_state.draft_results:
+              st.session_state.draft_results[current_team] = {}
+            st.session_state.draft_results[current_team][cur_round] = chosen
+            st.session_state.already_drafted.add(chosen)
+            st.session_state.round_queue_idx += 1
+            st.rerun()
+      else:
+        # この巡目が全員終わったら、次の巡目へ進むか終了するかを選ぶボタン
+        st.success(f"🎉 第 {cur_round} 巡目の指名がすべて終了しました！")
+
+        col1, col2 = st.columns(2)
+        with col1:
+          if st.button("➡️ 次の巡目（{cur_round + 1}巡目）へ進む", type="primary"):
+            st.session_state.current_round += 1
+            st.session_state.round_queue_idx = 0
+            st.rerun()
+        with col2:
+          if st.button("🏁 ドラフト会議を終了して全結果を見る"):
+            st.session_state.draft_state = "draft_complete"
+            st.rerun()
+
+    # ------------------------------------------
+    # ステップ E: 最終結果の一覧表示
+    # ------------------------------------------
+    elif st.session_state.draft_state == "draft_complete":
+      st.subheader("🏆 ドラフト会議 最終指名結果一覧")
+
+      # 最大何巡目まで行われたか取得
+      max_r = max(
+          [
+              max(r_dict.keys())
+              for r_dict in st.session_state.draft_results.values()
+              if r_dict
+          ],
+          default=1,
+      )
+
+      summary_data = []
+      for team in npb_teams:
+        row = {"球団": f"★ {team} (あなた)" if team == user_team else team}
+        for r in range(1, max_r + 1):
+          p_name = st.session_state.draft_results.get(team, {}).get(r, "-")
+          row[f"{r}位" if r == 1 else f"{r}巡目"] = p_name
+        summary_data.append(row)
+
+      st.dataframe(
+          pd.DataFrame(summary_data), use_container_width=True, hide_index=True
+      )
+
+
+# 補助関数：AIが外れ1位を自動処理するロジック
+def process_ai_hature_1st(df, npb_teams):
+  confirmed_picks = st.session_state.temp_r1_picks
+  loser_teams = st.session_state.pending_losers
+  rem_pool = df[~df["氏名"].isin(confirmed_picks.keys())].copy()
+
+  for team in loser_teams:
+    if len(rem_pool) > 0:
+      t_weights = st.session_state.team_weights[team]
+      rem_pool["スコア"] = rem_pool["基礎スコア"] * rem_pool["カテゴリ"].map(
+          t_weights
+      )
+      rem_pool = rem_pool.sort_values(by="スコア", ascending=False).reset_index(
+          drop=True
+      )
+      top_n = rem_pool.head(5)
+      chosen = top_n.sample(n=1).iloc[0]["氏名"]
+      confirmed_picks[chosen] = team
+      rem_pool = rem_pool[rem_pool["氏名"] != chosen].reset_index(drop=True)
+
+  for p, t in confirmed_picks.items():
+    if t not in st.session_state.draft_results:
+      st.session_state.draft_results[t] = {}
+    st.session_state.draft_results[t][1] = p
+    st.session_state.already_drafted.add(p)
