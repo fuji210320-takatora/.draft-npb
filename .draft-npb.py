@@ -348,6 +348,7 @@ if df_raw is not None:
     if "max_rounds" not in st.session_state:
         st.session_state.max_rounds = 7
 
+    # 12球団の初期設定プリセットをロード
     if "team_weights" not in st.session_state:
         st.session_state.team_weights = {
             t: dict(INITIAL_PRESETS[t]) for t in npb_teams
@@ -393,25 +394,31 @@ if df_raw is not None:
 
     df["カテゴリ"] = df.apply(get_cat, axis=1)
 
+    # 評価点マッピング（B+は74点）
     score_dict = {"S": 97, "A": 85, "A-": 79, "B+": 74, "B": 70, "B-": 66, "C+": 60, "C": 55, "C-": 50}
     df["基礎スコア"] = df["評価"].astype(str).str.strip().map(score_dict).fillna(45)
 
-    # ★ 指名思考ロジック関数
-    # 「基本的には最高スコアの選手を指名。ただしトップから5点以内の選手が複数いる場合はその中からランダム選出」
-    def pick_ai_player(team_name, pool_df):
+    # ★ 思考ロジック関数
+    # 1. 1位・2位（round_num <= 2）は「基礎スコア >= 74 (B+以上)」から優先選出。存在しない（枯渇した）場合は全体から選出。
+    # 2. 対象プールの中で「最高スコアから5点以内」の選手たちの中からランダム選出。
+    def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
+        
+        target_pool = pool_df.copy()
+        # 1位・2位はB+以上優先
+        if round_num <= 2:
+            b_plus_cands = target_pool[target_pool["基礎スコア"] >= 74]
+            if len(b_plus_cands) > 0:
+                target_pool = b_plus_cands
+
         w = st.session_state.team_weights[team_name]
-        tdf = pool_df.copy()
-        tdf["score"] = tdf["基礎スコア"] * tdf["カテゴリ"].map(lambda c: w.get(c, 1.0))
+        target_pool["score"] = target_pool["基礎スコア"] * target_pool["カテゴリ"].map(lambda c: w.get(c, 1.0))
         
-        # 最高スコアを取得
-        max_score = tdf["score"].max()
-        # トップから5点以内の候補群を抽出
-        top_candidates = tdf[tdf["score"] >= (max_score - 5.0)]
-        
-        # 該当候補の中からランダムに1人選出
-        chosen_name = top_candidates.sample(n=1).iloc[0]["氏名"]
+        max_score = target_pool["score"].max()
+        # 5点以内の候補群からランダム選出
+        top_cands = target_pool[target_pool["score"] >= (max_score - 5.0)]
+        chosen_name = top_cands.sample(n=1).iloc[0]["氏名"]
         return chosen_name
 
     # サイドバー切り替え
@@ -618,8 +625,8 @@ if df_raw is not None:
                 for t in npb_teams:
                     if t == user_team:
                         continue
-                    # 指名思考ロジック（トップから5点以内ランダム）
-                    bids[t] = pick_ai_player(t, avail_pool)
+                    # 1位思考ロジック（B+以上優先、5点以内ランダム）
+                    bids[t] = pick_ai_player(t, avail_pool, round_num=1)
 
                 p_bids = {}
                 for t, p in bids.items():
@@ -669,11 +676,11 @@ if df_raw is not None:
                 if user_team in losers:
                     st.session_state.draft_phase = "r1_hature_user"
                 else:
-                    # AI球団の外れ1位処理（トップ5点以内ロジック適用）
+                    # AI球団の外れ1位処理（B+以上優先、5点以内ランダム）
                     rem = df[~df["氏名"].isin(st.session_state.already_drafted)].copy()
                     for lt in losers:
                         if len(rem) > 0:
-                            ch = pick_ai_player(lt, rem)
+                            ch = pick_ai_player(lt, rem, round_num=1)
                             st.session_state.draft_picks[lt][1] = ch
                             st.session_state.already_drafted.add(ch)
                             rem = rem[rem["氏名"] != ch]
@@ -704,7 +711,7 @@ if df_raw is not None:
                 rem = df[~df["氏名"].isin(st.session_state.already_drafted)].copy()
                 for lt in st.session_state.loser_teams:
                     if len(rem) > 0:
-                        ch = pick_ai_player(lt, rem)
+                        ch = pick_ai_player(lt, rem, round_num=1)
                         st.session_state.draft_picks[lt][1] = ch
                         st.session_state.already_drafted.add(ch)
                         rem = rem[rem["氏名"] != ch]
@@ -744,8 +751,8 @@ if df_raw is not None:
                 else:
                     st.write(f"{now_team}の指名番です。")
                     if st.button(f"{now_team} の指名を行う（次へ）", type="secondary", use_container_width=True):
-                        # 指名思考ロジック（トップから5点以内ランダム）
-                        ch = pick_ai_player(now_team, rem_pool)
+                        # round_numを渡して2位ならB+以上優先を適用
+                        ch = pick_ai_player(now_team, rem_pool, round_num=c_rnd)
                         st.session_state.draft_picks[now_team][c_rnd] = ch
                         st.session_state.already_drafted.add(ch)
                         st.session_state.weber_index += 1
