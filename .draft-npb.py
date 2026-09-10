@@ -111,13 +111,13 @@ if df_raw is not None:
   weights["社外"] = c12.slider("社外", 0.0, 2.0, 1.0, 0.1)
   weights["他"] = st.sidebar.slider("その他", 0.0, 2.0, 1.0, 0.1)
 
-  # --- 4. データの前処理とスコア計算（実際の列名に合わせる） ---
+  # --- 4. データの前処理とスコア計算 ---
   df = df_raw.copy()
 
 
   def get_category_key(row):
-    kbn = str(row["区分"])  # 例: 高校生、大学生 など
-    pos = str(row["守備位置"])  # 例: 投手、捕手 など
+    kbn = str(row["区分"])
+    pos = str(row["守備位置"])
 
     prefix = "他"
     if "高" in kbn:
@@ -143,8 +143,30 @@ if df_raw is not None:
 
   df["カテゴリ"] = df.apply(get_category_key, axis=1)
   df["係数"] = df["カテゴリ"].map(weights).fillna(1.0)
-  # 「評価」カラムに係数を掛け算して最終スコアを算出
-  df["最終評価スコア"] = df["評価"] * df["係数"]
+
+
+  # ご指定のランク対応表に基づくスコア変換関数
+  def rank_to_score(rank):
+    rank_str = str(rank).strip()
+    score_map = {
+        "S": 97,
+        "A": 85,
+        "A-": 79,
+        "B+": 74,
+        "B": 70,
+        "B-": 66,
+        "C+": 60,
+        "C": 55,
+        "C-": 50,
+    }
+    # マッピングにないランクの場合はデフォルトで45点とする
+    return score_map.get(rank_str, 45)
+
+
+  # 評価（アルファベット）を数値点数に変換してから係数を掛ける
+  df["基礎スコア"] = df["評価"].apply(rank_to_score)
+  df["最終評価スコア"] = df["基礎スコア"] * df["係数"]
+
   df_sorted = df.sort_values(by="最終評価スコア", ascending=False).reset_index(
       drop=True
   )
@@ -176,7 +198,6 @@ if df_raw is not None:
         df_sorted.iloc[0]["氏名"] if len(df_sorted) > 0 else ""
     )
 
-  # ユーザーが自分の指名選手を選べるセレクトボックス
   st.write("---")
   st.subheader("📝 あなたの球団の1位指名選手選択")
   selected_pick = st.selectbox(
@@ -202,7 +223,8 @@ if df_raw is not None:
               "指名選手": p["氏名"],
               "区分": p["区分"],
               "守備": p["守備位置"],
-              "スコア": round(p["最終評価スコア"], 2),
+              "評価": p["評価"],
+              "最終スコア": round(p["最終評価スコア"], 1),
           })
           pool = pool[pool["氏名"] != chosen_name].reset_index(drop=True)
         else:
@@ -212,7 +234,8 @@ if df_raw is not None:
               "指名選手": p["氏名"],
               "区分": p["区分"],
               "守備": p["守備位置"],
-              "スコア": round(p["最終評価スコア"], 2),
+              "評価": p["評価"],
+              "最終スコア": round(p["最終評価スコア"], 1),
           })
           pool = pool.iloc[1:].reset_index(drop=True)
       else:
@@ -224,7 +247,8 @@ if df_raw is not None:
               "指名選手": p["氏名"],
               "区分": p["区分"],
               "守備": p["守備位置"],
-              "スコア": round(p["最終評価スコア"], 2),
+              "評価": p["評価"],
+              "最終スコア": round(p["最終評価スコア"], 1),
           })
           pool = pool.iloc[1:].reset_index(drop=True)
 
