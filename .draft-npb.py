@@ -254,13 +254,13 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
 }
 </style>""", unsafe_allow_html=True)
 
-# --- 2. 12球団の初期設定プリセットデータ ---
+# --- 2. 12球団の最新初期設定プリセットデータ ---
 INITIAL_PRESETS = {
     "阪神": {
         "高投": 1.0, "高捕": 1.05, "高内": 1.2, "高外": 1.05,
         "大投": 1.2, "大捕": 1.4, "大内": 1.2, "大外": 1.05,
         "社投": 0.9, "社捕": 1.0, "社内": 1.05, "社外": 0.85,
-        "独投": 0.95, "独捕": 1.0, "独内": 1.0, "独外": 0.85, "他": 1.0
+        "独投": 0.95, "独捕": 1.1, "独内": 1.0, "独外": 0.85, "他": 1.0
     },
     "DeNA": {
         "高投": 1.25, "高捕": 0.95, "高内": 1.05, "高外": 1.1,
@@ -281,14 +281,14 @@ INITIAL_PRESETS = {
         "独投": 1.0, "独捕": 0.8, "独内": 0.8, "独外": 1.0, "他": 1.0
     },
     "広島": {
-        "高投": 1.2, "高捕": 1.1, "高内": 1.0, "高外": 0.95,
-        "大投": 1.3, "大捕": 1.15, "大内": 1.05, "大外": 1.15,
+        "高投": 0.85, "高捕": 1.0, "高内": 1.0, "高外": 0.95,
+        "大投": 1.28, "大捕": 1.3, "大内": 1.15, "大外": 1.2,
         "社投": 1.0, "社捕": 1.05, "社内": 1.0, "社外": 1.15,
         "独投": 0.9, "独捕": 0.9, "独内": 1.0, "独外": 1.05, "他": 1.0
     },
     "ヤクルト": {
-        "高投": 1.1, "高捕": 0.85, "高内": 1.2, "高外": 1.2,
-        "大投": 1.3, "大捕": 0.9, "大内": 1.15, "大外": 1.15,
+        "高投": 1.05, "高捕": 0.9, "高内": 1.2, "高外": 1.2,
+        "大投": 1.35, "大捕": 0.9, "大内": 1.15, "大外": 1.15,
         "社投": 1.2, "社捕": 0.7, "社内": 1.05, "社外": 1.1,
         "独投": 1.0, "独捕": 0.6, "独内": 0.85, "独外": 0.95, "他": 1.0
     },
@@ -302,11 +302,11 @@ INITIAL_PRESETS = {
         "高投": 1.15, "高捕": 1.1, "高内": 1.0, "高外": 1.0,
         "大投": 1.25, "大捕": 0.9, "大内": 1.15, "大外": 1.1,
         "社投": 1.0, "社捕": 0.85, "社内": 1.0, "社外": 1.0,
-        "独投": 0.9, "独捕": 0.8, "独内": 0.9, "独外": 0.9, "他": 1.0
+        "独投": 0.9, "独捕": 0.8, "独内": 1.0, "独外": 1.0, "他": 1.0
     },
     "オリックス": {
-        "高投": 1.2, "高捕": 1.0, "高内": 1.1, "高外": 1.1,
-        "大投": 1.25, "大捕": 0.85, "大内": 1.0, "大外": 1.0,
+        "高投": 1.25, "高捕": 1.0, "高内": 1.1, "高外": 1.1,
+        "大投": 1.25, "大捕": 1.1, "大内": 1.0, "大外": 1.0,
         "社投": 1.15, "社捕": 0.8, "社内": 0.9, "社外": 0.9,
         "独投": 1.1, "独捕": 0.7, "独内": 0.8, "独外": 0.85, "他": 1.0
     },
@@ -415,7 +415,6 @@ if df_raw is not None:
     df["メイン守備"] = df["守備位置"].apply(get_main_pos)
     df["カテゴリ"] = df.apply(get_cat, axis=1)
 
-    # ★ 指定の評価スコア配点
     score_dict = {
         "S": 97,
         "A+": 93,
@@ -438,6 +437,7 @@ if df_raw is not None:
             "pos": str(r.get("守備位置", "")).strip(),
             "main_pos": str(r.get("メイン守備", "他")).strip(),
             "kbn": str(r.get("区分", "")).strip(),
+            "cat": str(r.get("カテゴリ", "他")).strip(),
             "rank": str(r.get("評価", "")).strip(),
             "base_score": float(r.get("基礎スコア", 50))
         }
@@ -449,21 +449,13 @@ if df_raw is not None:
             return f"{name}（{team_str}{info['pos']}）"
         return name
 
-    # ★ 思考方針アルゴリズム：
-    # 1. 1位・2位はB+以上（基礎スコア80点以上: S, A+, A, A-, B+）優先
-    # 2. ポジションバランス（3位以降）：未指名メイン守備（投・捕・内・外）は係数1.05倍
-    # 3. 1位指名時：
-    #    - 最高スコアから10点以内の選手がいる場合: トップ6/10 (60%) : 10点以内の他全選手4/10 (40%)
-    #    - 10点以内にいない場合: 重複回避（最高アルファベット評価ならトップ 70% : 次点 30%）
-    # 4. 2位以下の指名時：
-    #    - トップ7/10 (70%) : 次点〜8番目の候補たち3/10 (30%)
+    # 思考方針アルゴリズム（10点以内6:4、重複回避7:3、2位以下7:3、ポジションバランス、4位以降独立1.1倍）
     def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
         
         target_pool = pool_df.copy()
         
-        # 1位・2位はB+以上（基礎スコア80以上）優先
         if round_num <= 2:
             b_plus_cands = target_pool[target_pool["基礎スコア"] >= 80]
             if len(b_plus_cands) > 0:
@@ -480,9 +472,17 @@ if df_raw is not None:
 
         def calc_score(row):
             base = row["基礎スコア"] * w.get(row["カテゴリ"], 1.0)
+            
+            # 3位以降：ポジションバランス（未指名ポジションなら1.05倍）
             if round_num >= 3:
                 if row["メイン守備"] in ["投", "捕", "内", "外"] and (row["メイン守備"] not in already_positions):
                     base *= 1.05
+                    
+            # 4位以降：独立リーグ選手なら1.1倍
+            if round_num >= 4:
+                if str(row["カテゴリ"]).startswith("独") or ("独" in str(row["区分"])):
+                    base *= 1.10
+                    
             return base
 
         target_pool["score"] = target_pool.apply(calc_score, axis=1)
@@ -491,7 +491,7 @@ if df_raw is not None:
         top_player = target_pool.iloc[0]["氏名"]
         max_score = target_pool.iloc[0]["score"]
 
-        # 1位指名の思考ロジック
+        # 1位指名
         if round_num == 1:
             cands_within_10 = target_pool[(target_pool["score"] >= max_score - 10.0) & (target_pool["氏名"] != top_player)]
 
@@ -510,7 +510,7 @@ if df_raw is not None:
                         if random.random() < 0.30:
                             return runner_up
                 return top_player
-        # 2位以下の思考ロジック
+        # 2位以下
         else:
             sub_cands = target_pool.iloc[1:8]
             if len(sub_cands) > 0:
@@ -543,6 +543,7 @@ if df_raw is not None:
         st.markdown("## ⚙️ ドラフト初期設定")
         st.write("操作球団、指名人数、各球団の好みを設定します。")
 
+        # 1. 担当球団の選択
         st.markdown("### 1. 操作する球団を選ぶ")
         selected_user_team = st.selectbox(
             "あなたの担当球団",
@@ -551,6 +552,7 @@ if df_raw is not None:
         )
         st.session_state.user_team = selected_user_team
 
+        # 2. 指名枠数
         st.markdown("### 2. 指名枠数（巡数）の設定")
         st.session_state.max_rounds = st.slider(
             "各球団の最大指名人数（巡数）",
@@ -563,44 +565,56 @@ if df_raw is not None:
 
         st.divider()
 
+        # 3. 12球団の係数設定（プルダウンでスライダーの表示/非表示を切り替え）
         st.markdown("### 3. 各球団のカテゴリ別係数設定")
-        edit_team = st.selectbox(
-            "係数を調整する球団を選択",
-            npb_teams,
-            index=npb_teams.index(st.session_state.user_team),
-            key="tune_team_select"
+        
+        slider_mode = st.selectbox(
+            "球団係数の設定方法",
+            ["初期プリセットのまま使用する（推奨）", "手動で調整・確認する"],
+            index=0,
+            key="slider_mode_select"
         )
-        
-        st.write(f"**{edit_team} の補正係数** （スライダーで微調整可能）")
-        w = st.session_state.team_weights[edit_team]
-        
-        st.caption("高校生")
-        c1, c2, c3, c4 = st.columns(4)
-        w["高投"] = c1.slider("高投", 0.0, 2.0, float(w.get("高投", 1.0)), 0.05, key=f"s_{edit_team}_高投")
-        w["高捕"] = c2.slider("高捕", 0.0, 2.0, float(w.get("高捕", 1.0)), 0.05, key=f"s_{edit_team}_高捕")
-        w["高内"] = c3.slider("高内", 0.0, 2.0, float(w.get("高内", 1.0)), 0.05, key=f"s_{edit_team}_高内")
-        w["高外"] = c4.slider("高外", 0.0, 2.0, float(w.get("高外", 1.0)), 0.05, key=f"s_{edit_team}_高外")
 
-        st.caption("大学生")
-        c5, c6, c7, c8 = st.columns(4)
-        w["大投"] = c5.slider("大投", 0.0, 2.0, float(w.get("大投", 1.0)), 0.05, key=f"s_{edit_team}_大投")
-        w["大捕"] = c6.slider("大捕", 0.0, 2.0, float(w.get("大捕", 1.0)), 0.05, key=f"s_{edit_team}_大捕")
-        w["大内"] = c7.slider("大内", 0.0, 2.0, float(w.get("大内", 1.0)), 0.05, key=f"s_{edit_team}_大内")
-        w["大外"] = c8.slider("大外", 0.0, 2.0, float(w.get("大外", 1.0)), 0.05, key=f"s_{edit_team}_大外")
+        if slider_mode == "手動で調整・確認する":
+            edit_team = st.selectbox(
+                "係数を調整する球団を選択",
+                npb_teams,
+                index=npb_teams.index(st.session_state.user_team),
+                key="tune_team_select"
+            )
+            
+            st.write(f"**{edit_team} の補正係数** （スライダーで微調整可能）")
+            w = st.session_state.team_weights[edit_team]
+            
+            st.caption("高校生")
+            c1, c2, c3, c4 = st.columns(4)
+            w["高投"] = c1.slider("高投", 0.0, 2.0, float(w.get("高投", 1.0)), 0.01, key=f"s_{edit_team}_高投")
+            w["高捕"] = c2.slider("高捕", 0.0, 2.0, float(w.get("高捕", 1.0)), 0.01, key=f"s_{edit_team}_高捕")
+            w["高内"] = c3.slider("高内", 0.0, 2.0, float(w.get("高内", 1.0)), 0.01, key=f"s_{edit_team}_高内")
+            w["高外"] = c4.slider("高外", 0.0, 2.0, float(w.get("高外", 1.0)), 0.01, key=f"s_{edit_team}_高外")
 
-        st.caption("社会人")
-        c9, c10, c11, c12 = st.columns(4)
-        w["社投"] = c9.slider("社投", 0.0, 2.0, float(w.get("社投", 1.0)), 0.05, key=f"s_{edit_team}_社投")
-        w["社捕"] = c10.slider("社捕", 0.0, 2.0, float(w.get("社捕", 1.0)), 0.05, key=f"s_{edit_team}_社捕")
-        w["社内"] = c11.slider("社内", 0.0, 2.0, float(w.get("社内", 1.0)), 0.05, key=f"s_{edit_team}_社内")
-        w["社外"] = c12.slider("社外", 0.0, 2.0, float(w.get("社外", 1.0)), 0.05, key=f"s_{edit_team}_社外")
+            st.caption("大学生")
+            c5, c6, c7, c8 = st.columns(4)
+            w["大投"] = c5.slider("大投", 0.0, 2.0, float(w.get("大投", 1.0)), 0.01, key=f"s_{edit_team}_大投")
+            w["大捕"] = c6.slider("大捕", 0.0, 2.0, float(w.get("大捕", 1.0)), 0.01, key=f"s_{edit_team}_大捕")
+            w["大内"] = c7.slider("大内", 0.0, 2.0, float(w.get("大内", 1.0)), 0.01, key=f"s_{edit_team}_大内")
+            w["大外"] = c8.slider("大外", 0.0, 2.0, float(w.get("大外", 1.0)), 0.01, key=f"s_{edit_team}_大外")
 
-        st.caption("独立リーグ")
-        c13, c14, c15, c16 = st.columns(4)
-        w["独投"] = c13.slider("独投", 0.0, 2.0, float(w.get("独投", 1.0)), 0.05, key=f"s_{edit_team}_独投")
-        w["独捕"] = c14.slider("独捕", 0.0, 2.0, float(w.get("独捕", 1.0)), 0.05, key=f"s_{edit_team}_独捕")
-        w["独内"] = c15.slider("独内", 0.0, 2.0, float(w.get("独内", 1.0)), 0.05, key=f"s_{edit_team}_独内")
-        w["独外"] = c16.slider("独外", 0.0, 2.0, float(w.get("独外", 1.0)), 0.05, key=f"s_{edit_team}_独外")
+            st.caption("社会人")
+            c9, c10, c11, c12 = st.columns(4)
+            w["社投"] = c9.slider("社投", 0.0, 2.0, float(w.get("社投", 1.0)), 0.01, key=f"s_{edit_team}_社投")
+            w["社捕"] = c10.slider("社捕", 0.0, 2.0, float(w.get("社捕", 1.0)), 0.01, key=f"s_{edit_team}_社捕")
+            w["社内"] = c11.slider("社内", 0.0, 2.0, float(w.get("社内", 1.0)), 0.01, key=f"s_{edit_team}_社内")
+            w["社外"] = c12.slider("社外", 0.0, 2.0, float(w.get("社外", 1.0)), 0.01, key=f"s_{edit_team}_社外")
+
+            st.caption("独立リーグ")
+            c13, c14, c15, c16 = st.columns(4)
+            w["独投"] = c13.slider("独投", 0.0, 2.0, float(w.get("独投", 1.0)), 0.01, key=f"s_{edit_team}_独投")
+            w["独捕"] = c14.slider("独捕", 0.0, 2.0, float(w.get("独捕", 1.0)), 0.01, key=f"s_{edit_team}_独捕")
+            w["独内"] = c15.slider("独内", 0.0, 2.0, float(w.get("独内", 1.0)), 0.01, key=f"s_{edit_team}_独内")
+            w["独外"] = c16.slider("独外", 0.0, 2.0, float(w.get("独外", 1.0)), 0.01, key=f"s_{edit_team}_独外")
+        else:
+            st.caption("✅ 全12球団の初期設定プリセットが適用されています。")
 
         st.write("")
         if st.button("🏟️ この設定でドラフト会議会場へ進む", type="primary", use_container_width=True):
@@ -785,7 +799,6 @@ if df_raw is not None:
                             bids[t] = pick_ai_player(t, avail_pool, round_num=1)
 
                         st.session_state.r1_current_bids = bids
-                        # 下の球団から順に開票
                         st.session_state.r1_reveal_order = list(reversed(st.session_state.r1_active_teams))
                         st.session_state.r1_reveal_idx = 0
                         st.session_state.r1_revealed_bids = {}
@@ -805,7 +818,7 @@ if df_raw is not None:
                     st.session_state.draft_phase = "r1_reveal_bids"
                     st.rerun()
 
-        # 1位の順次開票フェーズ
+        # 1位の順次開票フェーズ（下の球団から順に開票アナウンス）
         elif phase == "r1_reveal_bids":
             reveal_order = st.session_state.r1_reveal_order
             r_idx = st.session_state.r1_reveal_idx
@@ -967,4 +980,4 @@ if df_raw is not None:
             st.session_state.r1_reveal_order = []
             st.session_state.r1_reveal_idx = 0
             st.session_state.r1_revealed_bids = {}
-            st.rerun()
+            st.rerun)さ
