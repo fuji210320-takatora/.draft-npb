@@ -6,19 +6,41 @@ st.set_page_config(
     page_title="NPB ドラフトシミュレーター", page_icon="⚾", layout="centered"
 )
 
-# --- 1. スタイル定義（完全デザイン・文字色固定） ---
+# --- 1. スタイル定義（ダークモードによる白文字化を全滅させる強力CSS） ---
 st.markdown(
     """<style>
-.stApp {
+/* ページ全体：背景と基本文字色の強制固定 */
+html, body, [data-testid="stAppViewContainer"], .stApp {
     background-color: #f6f5f1 !important;
-}
-
-div[data-testid="stAlert"] {
     color: #111827 !important;
 }
-div[data-testid="stAlert"] p,
-div[data-testid="stAlert"] span,
-div[data-testid="stAlert"] div {
+
+/* すべての見出し・テキスト・ラベル・Markdownの文字色を強制的に濃い色に */
+h1, h2, h3, h4, h5, h6,
+p, span, label, div,
+.stMarkdown, [data-testid="stMarkdownContainer"] p,
+[data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] span {
+    color: #111827 !important;
+}
+
+/* スライダーの数字やラベルの視認性確保 */
+[data-testid="stSlider"] label,
+[data-testid="stSlider"] div {
+    color: #111827 !important;
+}
+
+/* タブの未選択テキストもグレーで読めるように */
+button[data-baseweb="tab"] div {
+    color: #4b5563 !important;
+    font-weight: 700 !important;
+}
+button[data-baseweb="tab"][aria-selected="true"] div {
+    color: #a91e2c !important;
+    font-weight: 800 !important;
+}
+
+/* Streamlit標準アラートの文字色 */
+div[data-testid="stAlert"] * {
     color: #111827 !important;
     font-weight: 700 !important;
 }
@@ -81,12 +103,11 @@ div[data-testid="stAlert"] div {
     line-height: 1.3 !important;
 }
 
-/* ステータスバー */
+/* ステータスバー（ネイビー部分は白文字を維持） */
 .status-container {
     background-color: #172a3a !important;
     border-radius: 10px !important;
     padding: 14px 20px !important;
-    color: #ffffff !important;
     margin-bottom: 16px !important;
     display: flex !important;
     justify-content: space-between !important;
@@ -140,6 +161,9 @@ div[data-testid="stAlert"] div {
     justify-content: space-between !important;
     font-weight: 700 !important;
     font-size: 14px !important;
+}
+.board-header * {
+    color: #ffffff !important;
 }
 .board-table {
     width: 100% !important;
@@ -269,7 +293,7 @@ if df_raw is not None:
       "他",
   ]
 
-  # セッション初期化（初期画面は必ず「設定画面」）
+  # セッション初期化（初期画面は設定画面）
   if "current_screen" not in st.session_state:
     st.session_state.current_screen = "設定画面"
 
@@ -277,7 +301,7 @@ if df_raw is not None:
     st.session_state.user_team = "阪神"
 
   if "max_rounds" not in st.session_state:
-    st.session_state.max_rounds = 7  # デフォルト7人指名
+    st.session_state.max_rounds = 7
 
   if "team_weights" not in st.session_state:
     st.session_state.team_weights = {
@@ -342,9 +366,9 @@ if df_raw is not None:
       df["評価"].astype(str).str.strip().map(score_dict).fillna(45)
   )
 
-  # サイドバーナビゲーション
+  # サイドバー画面切替
   screen_choice = st.sidebar.radio(
-      "画面ナビゲーション",
+      "画面切り替え",
       ["⚙️ 初期設定", "🏟️ ドラフト会場"],
       index=0 if st.session_state.current_screen == "設定画面" else 1,
   )
@@ -353,7 +377,7 @@ if df_raw is not None:
   )
 
   # =========================================================================
-  # 画面1: 初期設定画面（ここからスタート）
+  # 画面1: 初期設定画面
   # =========================================================================
   if st.session_state.current_screen == "設定画面":
     st.markdown("## ⚙️ ドラフト初期設定")
@@ -378,7 +402,7 @@ if df_raw is not None:
 
     st.info(f"現在の担当球団: **{st.session_state.user_team}**")
 
-    # 2. 指名枠数（何巡目まで指名するか）
+    # 2. 指名枠数
     st.markdown("### 2. 指名枠数（巡数）の設定")
     st.session_state.max_rounds = st.slider(
         "各球団の最大指名人数（巡数）",
@@ -439,7 +463,7 @@ if df_raw is not None:
       st.rerun()
 
   # =========================================================================
-  # 画面2: ドラフト会議会場メイン画面
+  # 画面2: ドラフト会議会場
   # =========================================================================
   elif st.session_state.current_screen == "ドラフト会場":
     user_team = st.session_state.user_team
@@ -463,7 +487,7 @@ if df_raw is not None:
       header_badge = "ドラフト終了"
       header_msg = "全日程の指名が終了しました"
 
-    # --- A. ON THE CLOCK バナー ---
+    # ON THE CLOCK
     st.markdown(
         f"""<div class="otc-container">
 <div class="otc-flex">
@@ -480,7 +504,7 @@ if df_raw is not None:
         unsafe_allow_html=True,
     )
 
-    # --- B. ステータスバー（設定した指名枠数に連動） ---
+    # ステータスバー
     picked_count = len(st.session_state.draft_picks[user_team])
     st.markdown(
         f"""<div class="status-container">
@@ -507,7 +531,7 @@ if df_raw is not None:
         unsafe_allow_html=True,
     )
 
-    # --- C. 12球団・全指名ボード ---
+    # ボード
     table_rows = []
     for t in npb_teams:
       is_u = t == user_team
@@ -555,13 +579,10 @@ if df_raw is not None:
 
     st.write("")
 
-    # ==========================================
-    # D. コントロールパネル
-    # ==========================================
+    # コントロール
     avail_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
     sorted_pool = avail_pool.sort_values(by="基礎スコア", ascending=False)
 
-    # 1. 1位入札
     if phase == "r1_input":
       st.markdown("#### 🎯 1位入札選手の選択")
       user_pick = st.selectbox(
@@ -596,7 +617,6 @@ if df_raw is not None:
         st.session_state.draft_phase = "r1_confirm_bids"
         st.rerun()
 
-    # 2. 抽選フェーズ
     elif phase == "r1_confirm_bids":
       st.markdown("#### 📢 1位入札の競合状況")
       for p, teams in st.session_state.r1_competing.items():
@@ -662,7 +682,6 @@ if df_raw is not None:
             st.session_state.draft_phase = "finished"
         st.rerun()
 
-    # 3. 外れ1位
     elif phase == "r1_hature_user":
       st.error(
           f"抽選の結果、{user_team}は外れました。外れ1位の指名選手を選択してください。"
@@ -700,7 +719,6 @@ if df_raw is not None:
           st.session_state.draft_phase = "finished"
         st.rerun()
 
-    # 4. 2巡目以降
     elif phase == "round_progress":
       c_rnd = st.session_state.current_round
       order = list(reversed(npb_teams)) if c_rnd % 2 == 0 else npb_teams
