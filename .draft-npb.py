@@ -980,4 +980,4 @@ if df_raw is not None:
             st.session_state.r1_reveal_order = []
             st.session_state.r1_reveal_idx = 0
             st.session_state.r1_revealed_bids = {}
-            st.rerun)さ
+            st.rerun()
