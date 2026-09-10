@@ -365,20 +365,30 @@ if df_raw is not None:
         st.session_state.draft_picks = {t: {} for t in npb_teams}
         st.session_state.already_drafted = set()
         
-        # 1位指名用ステート
         st.session_state.r1_sub_round = 1
         st.session_state.r1_active_teams = list(npb_teams)
         st.session_state.r1_current_bids = {}
         st.session_state.r1_competitions = {}
         
-        # 2巡目以降用ステート
         st.session_state.current_round = 2
         st.session_state.weber_index = 0
 
     df = df_raw.copy()
 
+    def get_main_pos(pos_str):
+        p = str(pos_str)
+        if "投" in p:
+            return "投"
+        elif "捕" in p:
+            return "捕"
+        elif "内" in p:
+            return "内"
+        elif "外" in p:
+            return "外"
+        return "他"
+
     def get_cat(row):
-        kbn, pos = str(row["区分"]), str(row["守備位置"])
+        kbn = str(row["区分"])
         if "高" in kbn:
             pfx = "高"
         elif "大" in kbn:
@@ -390,19 +400,10 @@ if df_raw is not None:
         else:
             pfx = "他"
 
-        if "投" in pos:
-            sfx = "投"
-        elif "捕" in pos:
-            sfx = "捕"
-        elif "内" in pos:
-            sfx = "内"
-        elif "外" in pos:
-            sfx = "外"
-        else:
-            sfx = "他"
-
+        sfx = get_main_pos(row["守備位置"])
         return pfx + sfx
 
+    df["メイン守備"] = df["守備位置"].apply(get_main_pos)
     df["カテゴリ"] = df.apply(get_cat, axis=1)
 
     score_dict = {"S": 97, "A": 85, "A-": 79, "B+": 74, "B": 70, "B-": 66, "C+": 60, "C": 55, "C-": 50}
@@ -414,7 +415,10 @@ if df_raw is not None:
         player_dict[name] = {
             "team": str(r.get("学校・チーム", "")).strip(),
             "pos": str(r.get("守備位置", "")).strip(),
-            "kbn": str(r.get("区分", "")).strip()
+            "main_pos": str(r.get("メイン守備", "他")).strip(),
+            "kbn": str(r.get("区分", "")).strip(),
+            "rank": str(r.get("評価", "")).strip(),
+            "base_score": float(r.get("基礎スコア", 45))
         }
 
     def format_player_label(name):
@@ -424,21 +428,65 @@ if df_raw is not None:
             return f"{name}（{team_str}{info['pos']}）"
         return name
 
-    # 思考ロジック（1・2位はB+優先、5点以内ランダム）
+    # ★ 思考方針アルゴリズム：
+    # 1. 1位・2位はB+以上優先（枯渇時は全体）
+    # 2. ポジションバランス（3位以降）：チームがまだ指名していないメイン守備（投・捕・内・外）の選手は係数1.05倍！
+    # 3. 5点以内候補群からランダム選出
+    # 4. 重複回避（1位）：プール内最高アルファベット評価の選手を指名しようとした場合、次点（2位候補）と「7 : 3」で抽選！
     def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
+        
         target_pool = pool_df.copy()
+        
+        # 1位・2位はB+以上優先
         if round_num <= 2:
             b_plus_cands = target_pool[target_pool["基礎スコア"] >= 74]
             if len(b_plus_cands) > 0:
                 target_pool = b_plus_cands
 
         w = st.session_state.team_weights[team_name]
-        target_pool["score"] = target_pool["基礎スコア"] * target_pool["カテゴリ"].map(lambda c: w.get(c, 1.0))
+        
+        # 3位以降：ポジションバランス（まだ指名していないポジションの選手を1.05倍）
+        already_positions = set()
+        if round_num >= 3:
+            for r in range(1, round_num):
+                picked_p = st.session_state.draft_picks[team_name].get(r)
+                if picked_p and picked_p in player_dict:
+                    already_positions.add(player_dict[picked_p]["main_pos"])
+
+        def calc_score(row):
+            base = row["基礎スコア"] * w.get(row["カテゴリ"], 1.0)
+            if round_num >= 3:
+                # 投・捕・内・外の主要ポジションで未指名なら1.05倍
+                if row["メイン守備"] in ["投", "捕", "内", "外"] and (row["メイン守備"] not in already_positions):
+                    base *= 1.05
+            return base
+
+        target_pool["score"] = target_pool.apply(calc_score, axis=1)
+        target_pool = target_pool.sort_values(by="score", ascending=False).reset_index(drop=True)
+
         max_score = target_pool["score"].max()
         top_cands = target_pool[target_pool["score"] >= (max_score - 5.0)]
-        chosen_name = top_cands.sample(n=1).iloc[0]["氏名"]
+        chosen_candidate = top_cands.sample(n=1).iloc[0]
+        chosen_name = chosen_candidate["氏名"]
+
+        # 1位入札時の「重複回避」ロジック
+        if round_num == 1 and len(target_pool) >= 2:
+            # 現在残っているプール内での最高ランク（S, A, A-, B+...）を特定
+            highest_base_score = pool_df["基礎スコア"].max()
+            chosen_base_score = chosen_candidate["基礎スコア"]
+            
+            # 最高アルファベット評価の選手を指名しようとしている場合
+            if chosen_base_score >= highest_base_score:
+                # 次点の選手（チーム内スコア順で本命と異なる選手）
+                other_cands = target_pool[target_pool["氏名"] != chosen_name]
+                if len(other_cands) > 0:
+                    runner_up_name = other_cands.iloc[0]["氏名"]
+                    # 本命 70% : 次点（回避） 30% で抽選
+                    if random.random() < 0.30:
+                        chosen_name = runner_up_name
+
         return chosen_name
 
     # サイドバー切り替え
@@ -532,7 +580,6 @@ if df_raw is not None:
         max_r = st.session_state.max_rounds
         s_rnd = st.session_state.r1_sub_round
 
-        # 1位の名称バッジ
         if s_rnd == 1:
             r1_title = "1位・第1回入札"
         elif s_rnd == 2:
@@ -552,7 +599,7 @@ if df_raw is not None:
         elif phase == "round_progress":
             c_rnd = st.session_state.current_round
             header_badge = f"{c_rnd}位指名進行中"
-            header_msg = f"{c_rnd}巡目の指名を行っています"
+            header_msg = f"{c_rnd}巡目の指名をウェーバー順に行っています"
         else:
             header_badge = "ドラフト終了"
             header_msg = "全日程の指名が終了しました"
@@ -571,11 +618,7 @@ if df_raw is not None:
 </div>
 </div>""", unsafe_allow_html=True)
 
-        # --- B. ステータスバー（進行速度セレクター連動） ---
-        picked_count = len(st.session_state.draft_picks[user_team])
-        col_st1, col_st2 = st.columns([2, 1])
-        
-        # 進行速度ラジオボタン（横並び）
+        # --- B. ステータスバー ---
         speed_opts = ["じっくり", "標準", "高速", "自分まで"]
         selected_speed = st.radio(
             "⏱ 進行速度",
@@ -586,6 +629,7 @@ if df_raw is not None:
         )
         st.session_state.sim_speed = selected_speed
 
+        picked_count = len(st.session_state.draft_picks[user_team])
         st.markdown(f"""<div class="status-container">
 <div class="status-left">
 <div>
@@ -605,7 +649,7 @@ if df_raw is not None:
 </div>
 </div>""", unsafe_allow_html=True)
 
-        # --- C. 12球団・全指名ボード（横スクロール & 全巡表示） ---
+        # --- C. 12球団・全指名ボード（横スクロール） ---
         st.markdown(f"""<div class="board-header">
 <div>👁 12球団・全指名ボード</div>
 <div style="color: #f87171; font-size: 11px; font-weight: 800;"><span style="display:inline-block; width:8px; height:8px; background:#ef4444; border-radius:50%; margin-right:4px;"></span>LIVE</div>
@@ -662,10 +706,10 @@ if df_raw is not None:
         all_poss = ["すべて"] + sorted(list(df["守備位置"].dropna().unique()))
 
         # ----------------------------------------------------
-        # 1位指名フェーズ（外れ入札・抽選ループ）
+        # 1位指名フェーズ
         # ----------------------------------------------------
         if phase == "r1_input":
-            st.markdown(f"#### 🎯 {r1_title}（指名対象球団: {len(st.session_state.r1_active_teams)}球団）")
+            st.markdown(f"#### 🎯 {r1_title}（未確定: {len(st.session_state.r1_active_teams)}球団）")
 
             if user_team in st.session_state.r1_active_teams:
                 col_f1, col_f2 = st.columns(2)
@@ -704,7 +748,7 @@ if df_raw is not None:
                         st.session_state.draft_phase = "r1_confirm_bids"
                         st.rerun()
             else:
-                st.info(f"{user_team}は既に1位指名が確定しています。残りの未確定球団による{r1_title}を実行します。")
+                st.info(f"{user_team}は1位指名獲得済みです。未確定球団による{r1_title}を行います。")
                 if st.button(f"{r1_title}の入札を開票する", type="primary", use_container_width=True):
                     bids = {}
                     for t in st.session_state.r1_active_teams:
@@ -777,7 +821,7 @@ if df_raw is not None:
             if w_idx < len(order):
                 now_team = order[w_idx]
 
-                # ユーザーの番が来たらピタッと止まって選択待ち
+                # ユーザー球団の番：ピタッと止まって入力待ち
                 if now_team == user_team:
                     st.markdown(f"#### 🎯 選択権： **{now_team}（あなた）** （第{c_rnd}巡目 第{w_idx+1}指名）")
                     rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
@@ -808,16 +852,14 @@ if df_raw is not None:
                             st.session_state.weber_index += 1
                             st.rerun()
 
-                # AI球団の番：自動で指名して1球団ずつテンポよく進む！
+                # 他球団の番：指定速度でウェーバー順に自動シーケンス進行
                 else:
-                    st.info(f"🎙️ 第{c_rnd}巡目 第{w_idx+1}指名: **{now_team}** の選択希望選手を指名中……")
+                    st.info(f"🎙️ 第{c_rnd}巡目 第{w_idx+1}指名: **{now_team}** の指名進行中……")
                     
-                    # 速度に応じた待機ディレイ
                     speed_map = {"じっくり": 1.4, "標準": 0.75, "高速": 0.25, "自分まで": 0.02}
                     delay = speed_map.get(st.session_state.sim_speed, 0.75)
                     time.sleep(delay)
 
-                    # 指名ロジック適用
                     rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
                     ch = pick_ai_player(now_team, rem_pool, round_num=c_rnd)
                     st.session_state.draft_picks[now_team][c_rnd] = ch
@@ -826,7 +868,7 @@ if df_raw is not None:
                     st.rerun()
 
             else:
-                # この巡目が12球団すべて終了
+                # 当該巡目が終了
                 st.success(f"🎉 第{c_rnd}巡目の指名がすべて終了しました！")
                 if c_rnd < max_r:
                     if st.button(f"➡️ 第{c_rnd+1}巡目の指名を開始する", type="primary", use_container_width=True):
