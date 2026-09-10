@@ -26,9 +26,8 @@ st.title("⚾ ドラフトシミュレーター")
 
 # --- 1. スプレッドシートデータの読み込み ---
 SHEET_ID = "1Qd_GNT-V0Ololma_QpIAhgEzLSFXlsv8sMG99espI90"
-csv_url = (
-    f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv&gid=0"
-)
+# 従来の export?format=csv ではなく、gviz/tq を使う
+csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
 
 
 @st.cache_data(ttl=60)
