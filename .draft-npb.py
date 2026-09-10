@@ -6,12 +6,23 @@ st.set_page_config(
     page_title="NPB ドラフトシミュレーター", page_icon="⚾", layout="centered"
 )
 
-# --- 1. スタイル定義（インデント事故を防ぐため左詰めで記述） ---
+# --- 1. スタイル定義（背景同化・文字消えを完全に防止） ---
 st.markdown(
     """<style>
-/* 全体のベース背景 */
+/* ベース背景 */
 .stApp {
     background-color: #f6f5f1 !important;
+}
+
+/* Streamlit標準アラートの文字色強制上書き */
+div[data-testid="stAlert"] {
+    color: #111827 !important;
+}
+div[data-testid="stAlert"] p,
+div[data-testid="stAlert"] span,
+div[data-testid="stAlert"] div {
+    color: #111827 !important;
+    font-weight: 700 !important;
 }
 
 /* 1. 上部カード */
@@ -182,6 +193,34 @@ st.markdown(
     font-weight: 700 !important;
     color: #111827 !important;
 }
+
+/* 4. 競合・単独指名のカスタムカード（視認性100%確保） */
+.card-competing {
+    background-color: #fefce8 !important;
+    border: 1.5px solid #facc15 !important;
+    border-radius: 10px !important;
+    padding: 12px 16px !important;
+    margin-bottom: 10px !important;
+    color: #854d0e !important;
+    font-weight: 800 !important;
+    font-size: 15px !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+}
+.card-single {
+    background-color: #f0fdf4 !important;
+    border: 1.5px solid #86efac !important;
+    border-radius: 10px !important;
+    padding: 12px 16px !important;
+    margin-bottom: 10px !important;
+    color: #166534 !important;
+    font-weight: 800 !important;
+    font-size: 15px !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+}
 </style>""",
     unsafe_allow_html=True,
 )
@@ -300,7 +339,7 @@ if df_raw is not None:
       df["評価"].astype(str).str.strip().map(score_dict).fillna(45)
   )
 
-  # --- 3. 画面モード ---
+  # --- 3. 画面モード切り替え ---
   mode = st.sidebar.radio(
       "画面ナビゲーション", ["🏟️ ドラフト会場", "🎛️ 各球団の係数設定"]
   )
@@ -325,10 +364,10 @@ if df_raw is not None:
         w["大外"] = c8.slider("大外", 0.0, 2.0, w["大外"], 0.1, key=f"{t}_大外")
 
         c9, c10, c11, c12 = st.columns(4)
-        w["社投"] = col9.slider("社投", 0.0, 2.0, w["社投"], 0.1, key=f"{t}_社投")
-        w["社捕"] = col10.slider("社捕", 0.0, 2.0, w["社捕"], 0.1, key=f"{t}_社捕")
-        w["社内"] = col11.slider("社内", 0.0, 2.0, w["社内"], 0.1, key=f"{t}_社内")
-        w["社外"] = col12.slider("社外", 0.0, 2.0, w["社外"], 0.1, key=f"{t}_社外")
+        w["社投"] = c9.slider("社投", 0.0, 2.0, w["社投"], 0.1, key=f"{t}_社投")
+        w["社捕"] = c10.slider("社捕", 0.0, 2.0, w["社捕"], 0.1, key=f"{t}_社捕")
+        w["社内"] = c11.slider("社内", 0.0, 2.0, w["社内"], 0.1, key=f"{t}_社内")
+        w["社外"] = c12.slider("社外", 0.0, 2.0, w["社外"], 0.1, key=f"{t}_社外")
     st.stop()
 
   # ==========================================
@@ -485,15 +524,27 @@ if df_raw is not None:
       st.session_state.draft_phase = "r1_confirm_bids"
       st.rerun()
 
-  # 2. 抽選フェーズ
+  # 2. 抽選フェーズ（文字色くっきり表示）
   elif phase == "r1_confirm_bids":
     st.markdown("#### 📢 1位入札の競合状況")
     for p, teams in st.session_state.r1_competing.items():
       if len(teams) > 1:
         t_str = "、".join(teams)
-        st.warning(f"🔥 **{p}** に {len(teams)}球団が競合！（{t_str}）")
+        st.markdown(
+            f"""<div class="card-competing">
+<span>🔥</span>
+<div><strong>{p}</strong> に {len(teams)}球団が競合！（{t_str}）</div>
+</div>""",
+            unsafe_allow_html=True,
+        )
       else:
-        st.success(f"✅ **{p}**: **{teams[0]}** が単独指名！")
+        st.markdown(
+            f"""<div class="card-single">
+<span>✅</span>
+<div><strong>{p}</strong>: {teams[0]} が単独指名！</div>
+</div>""",
+            unsafe_allow_html=True,
+        )
 
     if st.button(
         "🎲 運命の抽選くじを引く！", type="primary", use_container_width=True
