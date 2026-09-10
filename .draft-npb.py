@@ -370,15 +370,15 @@ if df_raw is not None:
         st.session_state.draft_picks = {t: {} for t in npb_teams}
         st.session_state.already_drafted = set()
         
-        # 1位指名用ステート
         st.session_state.r1_sub_round = 1
         st.session_state.r1_active_teams = list(npb_teams)
         st.session_state.r1_current_bids = {}
         st.session_state.r1_competitions = {}
         
-        # 1位の順次開票用ステート
+        # 1位開票順用ステート
+        st.session_state.r1_reveal_order = []
         st.session_state.r1_reveal_idx = 0
-        st.session_state.r1_revealed_bids = {}  # 開票済みの入札 {team: player}
+        st.session_state.r1_revealed_bids = {}
         
         # 2巡目以降用ステート
         st.session_state.current_round = 2
@@ -501,7 +501,6 @@ if df_raw is not None:
             else:
                 return top_player
 
-    # 進行速度ディレイ（全体的に少し遅めに調整）
     speed_map = {
         "じっくり": 2.2,
         "標準": 1.4,
@@ -612,7 +611,7 @@ if df_raw is not None:
                 header_msg = f"{r1_title}。他球団の入札を開始します"
         elif phase == "r1_reveal_bids":
             header_badge = f"{r1_title}・開票中"
-            header_msg = f"各球団の{r1_title}選手を順番に開票しています……"
+            header_msg = f"下の球団から順番に{r1_title}選手を開票中……"
         elif phase == "r1_confirm_bids":
             header_badge = f"{r1_title}・開票完了"
             header_msg = f"{r1_title}の結果が出揃いました。抽選を行ってください"
@@ -759,7 +758,7 @@ if df_raw is not None:
                         key=f"sel_r1_{s_rnd}"
                     )
 
-                    if st.button(f"この選手を{r1_title}する（開票へ）", type="primary", use_container_width=True):
+                    if st.button(f"この選手を{r1_title}する（下の球団から開票へ）", type="primary", use_container_width=True):
                         bids = {user_team: user_pick}
                         for t in st.session_state.r1_active_teams:
                             if t == user_team:
@@ -767,30 +766,34 @@ if df_raw is not None:
                             bids[t] = pick_ai_player(t, avail_pool, round_num=1)
 
                         st.session_state.r1_current_bids = bids
+                        # ★ 下の球団から順（逆順）に開票リストを作成
+                        st.session_state.r1_reveal_order = list(reversed(st.session_state.r1_active_teams))
                         st.session_state.r1_reveal_idx = 0
                         st.session_state.r1_revealed_bids = {}
                         st.session_state.draft_phase = "r1_reveal_bids"
                         st.rerun()
             else:
                 st.info(f"{user_team}は1位指名獲得済みです。未確定球団による{r1_title}の開票を開始します。")
-                if st.button(f"{r1_title}の開票を開始する", type="primary", use_container_width=True):
+                if st.button(f"{r1_title}の開票を開始する（下の球団から）", type="primary", use_container_width=True):
                     bids = {}
                     for t in st.session_state.r1_active_teams:
                         bids[t] = pick_ai_player(t, avail_pool, round_num=1)
 
                     st.session_state.r1_current_bids = bids
+                    # ★ 下の球団から順（逆順）に開票リストを作成
+                    st.session_state.r1_reveal_order = list(reversed(st.session_state.r1_active_teams))
                     st.session_state.r1_reveal_idx = 0
                     st.session_state.r1_revealed_bids = {}
                     st.session_state.draft_phase = "r1_reveal_bids"
                     st.rerun()
 
-        # 1位の順次開票フェーズ（1球団ずつアナウンス）
+        # 1位の順次開票フェーズ（★下の球団から順に開票アナウンス）
         elif phase == "r1_reveal_bids":
-            active_list = st.session_state.r1_active_teams
+            reveal_order = st.session_state.r1_reveal_order
             r_idx = st.session_state.r1_reveal_idx
 
-            if r_idx < len(active_list):
-                now_team = active_list[r_idx]
+            if r_idx < len(reveal_order):
+                now_team = reveal_order[r_idx]
                 p_choice = st.session_state.r1_current_bids[now_team]
                 p_label = format_player_label(p_choice)
 
@@ -799,7 +802,6 @@ if df_raw is not None:
                 # 開票済みに登録
                 st.session_state.r1_revealed_bids[now_team] = p_choice
                 
-                # 少し遅めのディレイ待機
                 delay = speed_map.get(st.session_state.sim_speed, 1.4)
                 time.sleep(delay)
 
@@ -816,7 +818,7 @@ if df_raw is not None:
                 st.session_state.draft_phase = "r1_confirm_bids"
                 st.rerun()
 
-        # 1位の抽選フェーズ（競合一覧確認）
+        # 1位の抽選フェーズ
         elif phase == "r1_confirm_bids":
             st.markdown(f"#### 📢 {r1_title}の開票結果一覧")
 
@@ -909,7 +911,6 @@ if df_raw is not None:
                             st.rerun()
 
                 else:
-                    # 少し遅めのディレイ待機
                     delay = speed_map.get(st.session_state.sim_speed, 1.4)
                     
                     rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
@@ -949,6 +950,7 @@ if df_raw is not None:
             st.session_state.r1_active_teams = list(npb_teams)
             st.session_state.r1_current_bids = {}
             st.session_state.r1_competitions = {}
+            st.session_state.r1_reveal_order = []
             st.session_state.r1_reveal_idx = 0
             st.session_state.r1_revealed_bids = {}
             st.rerun()
