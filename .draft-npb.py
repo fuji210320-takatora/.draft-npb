@@ -414,20 +414,31 @@ if df_raw is not None:
 
     df["メイン守備"] = df["守備位置"].apply(get_main_pos)
     df["カテゴリ"] = df.apply(get_cat, axis=1)
+score_dict = {
+    "S": 97,
+    "A+": 93,
+    "A": 89,
+    "A-": 83,
+    "B+": 80,
+    "B": 73,
+    "B-": 69,
+    "C+": 64,
+    "C": 58,
+    "C-": 55,
+}
 
-    score_dict = {
-        "S": 97,
-        "A+": 93,
-        "A": 89,
-        "A-": 83,
-        "B+": 80,
-        "B": 73,
-        "B-": 69,
-        "C+": 64,
-        "C": 58,
-        "C-": 55
-    }
-    df["基礎スコア"] = df["評価"].astype(str).str.strip().map(score_dict).fillna(50)
+
+def parse_score(val):
+  s = str(val).strip()
+  # まず数値（整数・小数）に変換できるか試す
+  try:
+    return float(s)
+  except ValueError:
+    # 数値でなければアルファベット換算辞書を参照
+    return float(score_dict.get(s, 50.0))
+
+
+df["基礎スコア"] = df["評価"].apply(parse_score)
 
     player_dict = {}
     for _, r in df.iterrows():
