@@ -1,30 +1,20 @@
+import random
 import pandas as pd
 import streamlit as st
 
 # ページの設定
 st.set_page_config(
-    page_title="プロ野球ドラフトシミュレーター", page_icon="⚾", layout="centered"
+    page_title="プロ野球ドラフトシミュレーター（競合・抽選あり）",
+    page_icon="⚾",
+    layout="wide",
 )
 
-# スタイリング
-st.markdown(
-    """
-    <style>
-    .main-card {
-        background-color: #fcfbfa;
-        padding: 20px;
-        border-radius: 12px;
-        border: 1px solid #e0dede;
-        margin-bottom: 20px;
-    }
-    </style>
-""",
-    unsafe_allow_html=True,
+st.title("⚾ プロ野球ドラフトシミュレーター（完全版）")
+st.write(
+    "各球団の「補正（好み）」と、自分が担当する球団の設定を行い、1位指名の競合・抽選をシミュレーションします。"
 )
 
-st.title("⚾ ドラフトシミュレーター")
-
-# --- 1. スプレッドシートデータの読み込み (gviz形式) ---
+# --- 1. データの読み込み ---
 SHEET_ID = "1Qd_GNT-V0Ololma_QpIAhgEzLSFXlsv8sMG99espI90"
 csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
 
@@ -43,82 +33,132 @@ def load_data(url):
 df_raw = load_data(csv_url)
 
 if df_raw is not None:
-
-  # --- 2. 担当する球団を選ぶUI ---
-  st.markdown("### 担当する球団を選ぶ")
-  st.write("選んだ球団の指名だけ、あなたが決めます。")
-
-  teams_data = [
-      ("セ 阪神", "阪神"),
-      ("セ DeNA", "DeNA"),
-      ("セ 巨人", "巨人"),
-      ("セ 中日", "中日"),
-      ("セ 広島", "広島"),
-      ("セ ヤクルト", "ヤクルト"),
-      ("パ ソフトバンク", "ソフトバンク"),
-      ("パ 日本ハム", "日本ハム"),
-      ("パ オリックス", "オリックス"),
-      ("パ 楽天", "楽天"),
-      ("パ 西武", "西武"),
-      ("パ ロッテ", "ロッテ"),
+  npb_teams = [
+      "阪神",
+      "巨人",
+      "DeNA",
+      "広島",
+      "中日",
+      "ヤクルト",
+      "オリックス",
+      "ロッテ",
+      "ソフトバンク",
+      "楽天",
+      "西武",
+      "日本ハム",
   ]
 
+  # --- 2. 担当球団の選択 ---
+  st.subheader("1. 担当する球団を選ぶ")
   if "user_team" not in st.session_state:
     st.session_state.user_team = "阪神"
 
-  cols = st.columns(2)
-  for i, (label, team_name) in enumerate(teams_data):
-    col = cols[i % 2]
-    with col:
-      is_selected = st.session_state.user_team == team_name
-      button_type = "primary" if is_selected else "secondary"
-
+  cols = st.columns(6)
+  for i, team in enumerate(npb_teams):
+    with cols[i % 6]:
+      is_selected = st.session_state.user_team == team
       if st.button(
-          label, key=f"team_btn_{team_name}", use_container_width=True, type=button_type
+          team,
+          key=f"team_sel_{team}",
+          use_container_width=True,
+          type="primary" if is_selected else "secondary",
       ):
-        st.session_state.user_team = team_name
+        st.session_state.user_team = team
         st.rerun()
+
+  user_team = st.session_state.user_team
+  st.info(f"現在の担当球団: **{user_team}** （あなたの指名は下のセレクトボックスで決定します）")
 
   st.divider()
 
-  # --- 3. サイドバー：カテゴリ別係数設定 ---
-  st.sidebar.header("🎛️ 評価係数チューニング")
-  st.sidebar.write("各層の評価にボーナスをかけて好みを反映します。")
+  # --- 3. 12球団それぞれの「カテゴリ別補正（好み）」を設定する ---
+  st.subheader("2. 12球団の補正（好み）チューニング")
+  st.write(
+      "各球団がどのような選手層を好むか、倍率（係数）をそれぞれ設定できます。"
+  )
 
-  weights = {}
-  st.sidebar.subheader("高校生")
-  c1, c2 = st.sidebar.columns(2)
-  weights["高投"] = c1.slider("高投", 0.0, 2.0, 1.0, 0.1)
-  weights["高捕"] = c2.slider("高捕", 0.0, 2.0, 1.0, 0.1)
-  c3, c4 = st.sidebar.columns(2)
-  weights["高内"] = c3.slider("高内", 0.0, 2.0, 1.0, 0.1)
-  weights["高外"] = c4.slider("高外", 0.0, 2.0, 1.0, 0.1)
+  categories = [
+      "高投",
+      "高捕",
+      "高内",
+      "高外",
+      "大投",
+      "大捕",
+      "大内",
+      "大外",
+      "社投",
+      "社捕",
+      "社内",
+      "社外",
+      "他",
+  ]
 
-  st.sidebar.subheader("大学生")
-  c5, c6 = st.sidebar.columns(2)
-  weights["大投"] = c5.slider("大投", 0.0, 2.0, 1.0, 0.1)
-  weights["大捕"] = c6.slider("大捕", 0.0, 2.0, 1.0, 0.1)
-  c7, c8 = st.sidebar.columns(2)
-  weights["大内"] = c7.slider("大内", 0.0, 2.0, 1.0, 0.1)
-  weights["大外"] = c8.slider("大外", 0.0, 2.0, 1.0, 0.1)
+  # セッション状態で各球団の係数辞書を保持
+  if "team_weights" not in st.session_state:
+    # 初期値は全チーム一律1.0
+    st.session_state.team_weights = {}
+    for t in npb_teams:
+      st.session_state.team_weights[t] = {cat: 1.0 for cat in categories}
 
-  st.sidebar.subheader("社会人・その他")
-  c9, c10 = st.sidebar.columns(2)
-  weights["社投"] = c9.slider("社投", 0.0, 2.0, 1.0, 0.1)
-  weights["社捕"] = c10.slider("社捕", 0.0, 2.0, 1.0, 0.1)
-  c11, c12 = st.sidebar.columns(2)
-  weights["社内"] = c11.slider("社内", 0.0, 2.0, 1.0, 0.1)
-  weights["社外"] = c12.slider("社外", 0.0, 2.0, 1.0, 0.1)
-  weights["他"] = st.sidebar.slider("その他", 0.0, 2.0, 1.0, 0.1)
+  # タブで球団ごとに切り替えて係数をいじれるようにする
+  team_tabs = st.tabs(npb_teams)
 
-  # --- 4. データの前処理とスコア計算 ---
+  for i, team in enumerate(npb_teams):
+    with team_tabs[i]:
+      st.write(f"**{team} の補正設定**")
+      w = st.session_state.team_weights[team]
+
+      col1, col2, col3, col4 = st.columns(4)
+      w["高投"] = col1.slider(
+          "高投", 0.0, 2.0, w["高投"], 0.1, key=f"{team}_高投"
+      )
+      w["高捕"] = col2.slider(
+          "高捕", 0.0, 2.0, w["高捕"], 0.1, key=f"{team}_高捕"
+      )
+      w["高内"] = col3.slider(
+          "高内", 0.0, 2.0, w["高内"], 0.1, key=f"{team}_高内"
+      )
+      w["高外"] = col4.slider(
+          "高外", 0.0, 2.0, w["高外"], 0.1, key=f"{team}_高外"
+      )
+
+      col5, col6, col7, col8 = st.columns(4)
+      w["大投"] = col5.slider(
+          "大投", 0.0, 2.0, w["大投"], 0.1, key=f"{team}_大投"
+      )
+      w["大捕"] = col6.slider(
+          "大捕", 0.0, 2.0, w["大捕"], 0.1, key=f"{team}_大捕"
+      )
+      w["大内"] = col7.slider(
+          "大内", 0.0, 2.0, w["大内"], 0.1, key=f"{team}_大内"
+      )
+      w["大外"] = col8.slider(
+          "大外", 0.0, 2.0, w["大外"], 0.1, key=f"{team}_大外"
+      )
+
+      col9, col10, col11, col12 = st.columns(4)
+      w["社投"] = col9.slider(
+          "社投", 0.0, 2.0, w["社投"], 0.1, key=f"{team}_社投"
+      )
+      w["社捕"] = col10.slider(
+          "社捕", 0.0, 2.0, w["社捕"], 0.1, key=f"{team}_社捕"
+      )
+      w["社内"] = col11.slider(
+          "社内", 0.0, 2.0, w["社内"], 0.1, key=f"{team}_社内"
+      )
+      w["社外"] = col12.slider(
+          "社外", 0.0, 2.0, w["社外"], 0.1, key=f"{team}_社外"
+      )
+
+  st.divider()
+
+  # --- 4. 基礎データの前処理 ---
   df = df_raw.copy()
 
 
   def get_category_key(row):
     kbn = str(row["区分"])
     pos = str(row["守備位置"])
-
     prefix = "他"
     if "高" in kbn:
       prefix = "高"
@@ -138,16 +178,13 @@ if df_raw is not None:
       suffix = "外"
 
     key = prefix + suffix
-    return key if key in weights else "他"
+    return key if key in categories else "他"
 
 
   df["カテゴリ"] = df.apply(get_category_key, axis=1)
-  df["係数"] = df["カテゴリ"].map(weights).fillna(1.0)
 
 
-  # ご指定のランク対応表に基づくスコア変換関数
   def rank_to_score(rank):
-    rank_str = str(rank).strip()
     score_map = {
         "S": 97,
         "A": 85,
@@ -159,104 +196,126 @@ if df_raw is not None:
         "C": 55,
         "C-": 50,
     }
-    # マッピングにないランクの場合はデフォルトで45点とする
-    return score_map.get(rank_str, 45)
+    return score_map.get(str(rank).strip(), 45)
 
 
-  # 評価（アルファベット）を数値点数に変換してから係数を掛ける
   df["基礎スコア"] = df["評価"].apply(rank_to_score)
-  df["最終評価スコア"] = df["基礎スコア"] * df["係数"]
 
-  df_sorted = df.sort_values(by="最終評価スコア", ascending=False).reset_index(
-      drop=True
+  # --- 5. あなたの球団の指名選手選択 ---
+  st.subheader("3. あなたの球団の1位指名入札")
+  # 阪神などの基準スコア順でリストを作る
+  default_sorted = df.sort_values(by="基礎スコア", ascending=False)
+  user_choice = st.selectbox(
+      f"{user_team}で1位入札する選手を選ぶ",
+      default_sorted["氏名"].tolist(),
   )
 
-  # --- 5. ドラフト実行画面 ---
-  st.subheader(f"🎯 ドラフトシミュレーション (担当: {st.session_state.user_team})")
-
-  npb_teams = [
-      "阪神",
-      "巨人",
-      "DeNA",
-      "広島",
-      "中日",
-      "ヤクルト",
-      "オリックス",
-      "ロッテ",
-      "ソフトバンク",
-      "楽天",
-      "西武",
-      "日本ハム",
-  ]
-
-  user_team = st.session_state.user_team
-
-  if "draft_done" not in st.session_state:
-    st.session_state.draft_done = False
-    st.session_state.draft_results = []
-    st.session_state.user_choice = (
-        df_sorted.iloc[0]["氏名"] if len(df_sorted) > 0 else ""
-    )
-
-  st.write("---")
-  st.subheader("📝 あなたの球団の1位指名選手選択")
-  selected_pick = st.selectbox(
-      f"{user_team}の1位指名選手を選ぶ",
-      df_sorted["氏名"].tolist(),
-      index=0,
-  )
-  st.session_state.user_choice = selected_pick
-
-  if st.button("ドラフト1位指名を開始する", type="primary"):
-    results = []
-    pool = df_sorted.copy()
+  # --- 6. ドラフト入札・競合抽選シミュレーション実行 ---
+  if st.button("ドラフト1位会議（入札・抽選）を実行する", type="primary"):
+    # 各球団の1位入札先を決定する
+    bids = {}  # {球団名: 選手名}
 
     for team in npb_teams:
       if team == user_team:
-        # ユーザー担当球団の指名
-        chosen_name = st.session_state.user_choice
-        player_row = pool[pool["氏名"] == chosen_name]
-        if not player_row.empty:
-          p = player_row.iloc[0]
-          results.append({
-              "球団": f"★ {team} (あなた)",
-              "指名選手": p["氏名"],
-              "区分": p["区分"],
-              "守備": p["守備位置"],
-              "評価": p["評価"],
-              "最終スコア": round(p["最終評価スコア"], 1),
-          })
-          pool = pool[pool["氏名"] != chosen_name].reset_index(drop=True)
-        else:
-          p = pool.iloc[0]
-          results.append({
-              "球団": f"★ {team} (あなた)",
-              "指名選手": p["氏名"],
-              "区分": p["区分"],
-              "守備": p["守備位置"],
-              "評価": p["評価"],
-              "最終スコア": round(p["最終評価スコア"], 1),
-          })
-          pool = pool.iloc[1:].reset_index(drop=True)
+        bids[team] = user_choice
       else:
-        # AI球団はスコア上位から指名
-        if len(pool) > 0:
-          p = pool.iloc[0]
-          results.append({
-              "球団": team,
-              "指名選手": p["氏名"],
-              "区分": p["区分"],
-              "守備": p["守備位置"],
-              "評価": p["評価"],
-              "最終スコア": round(p["最終評価スコア"], 1),
-          })
-          pool = pool.iloc[1:].reset_index(drop=True)
+        # AI球団は「そのチームの補正係数」を掛けた評価スコアが最も高い選手を狙う
+        t_weights = st.session_state.team_weights[team]
+        temp_df = df.copy()
+        temp_df["球団別スコア"] = temp_df["基礎スコア"] * temp_df["カテゴリ"].map(
+            t_weights
+        )
+        best_player = temp_df.sort_values(
+            by="球団別スコア", ascending=False
+        ).iloc[0]["氏名"]
+        bids[team] = best_player
 
-    st.session_state.draft_results = results
-    st.session_state.draft_done = True
+    # 競合（同じ選手を複数球団が指名）の集計
+    # {選手名: [指名した球団のリスト]}
+    player_bids = {}
+    for team, player in bids.items():
+      if player not in player_bids:
+        player_bids[player] = []
+      player_bids[player].append(team)
 
-  # 結果の表示
-  if st.session_state.draft_done and st.session_state.draft_results:
-    st.subheader("🏆 1位指名 結果速報")
-    df_res = pd.DataFrame(st.session_state.draft_results)
-    st.table(df_res)
+    # 抽選処理と確定
+    confirmed_picks = {}  # {選手名: 獲得球団}
+    loser_teams = []  # 抽選に外れた球団のリスト
+
+    st.subheader("🎯 1位入札結果（競合発表）")
+    bids_display = []
+    for team, player in bids.items():
+      bids_display.append({"球団": team, "1位入札選手": player})
+    st.dataframe(pd.DataFrame(bids_display), use_container_width=True)
+
+    st.subheader("🎲 抽選結果 ＆ 外れ1位指名")
+    lottery_logs = []
+
+    for player, competing_teams in player_bids.items():
+      if len(competing_teams) == 1:
+        # 競合なし：単独指名成功
+        winner = competing_teams[0]
+        confirmed_picks[player] = winner
+        lottery_logs.append(
+            f"✅ **{player}**: **{winner}** が単独指名で交渉権獲得！"
+        )
+      else:
+        # 競合あり：抽選
+        winner = random.choice(competing_teams)
+        confirmed_picks[player] = winner
+        losers = [t for t in competing_teams if t != winner]
+        loser_teams.extend(losers)
+        losers_str = ", ".join(losers)
+        lottery_logs.append(
+            f"🔥 **{player}** ({len(competing_teams)}球団競合): 抽選の結果、**{winner}** が交渉権獲得！（外れ: {losers_str}）"
+        )
+
+    for log in lottery_logs:
+      st.markdown(log)
+
+    # 外れ1位の指名処理（はずれた球団が、残った選手から再指名）
+    # 簡易的に、残った選手の中から、各球団の補正スコアが一番高い選手を割り当てる
+    remaining_pool = df[~df["氏名"].isin(confirmed_picks.keys())].copy()
+
+    # 外れ1位の指名順は、実際のドラフト制度に沿うか、あるいはシンプルに残った順に処理
+    for team in loser_teams:
+      if len(remaining_pool) > 0:
+        t_weights = st.session_state.team_weights[team]
+        remaining_pool["スコア"] = remaining_pool["基礎スコア"] * remaining_pool[
+            "カテゴリ"
+        ].map(t_weights)
+        remaining_pool = remaining_pool.sort_values(
+            by="スコア", ascending=False
+        ).reset_index(drop=True)
+
+        hature_player = remaining_pool.iloc[0]["氏名"]
+        confirmed_picks[hature_player] = team
+        # プールから除外
+        remaining_pool = remaining_pool[
+            remaining_pool["氏名"] != hature_player
+        ].reset_index(drop=True)
+        lottery_logs.append(
+            f"🔄 **{team} (外れ1位)**: **{hature_player}** を指名"
+        )
+
+    st.divider()
+    st.subheader("🏆 1位指名 最終確定結果")
+
+    final_result_list = []
+    for team in npb_teams:
+      # どの選手を獲得したか逆引き
+      acquired_player = [
+          p for p, t in confirmed_picks.items() if t == team
+      ]
+      p_name = acquired_player[0] if acquired_player else "不明"
+      p_row = df[df["氏名"] == p_name].iloc[0] if p_name in df["氏名"].values else None
+
+      final_result_list.append({
+          "球団": f"★ {team} (あなた)" if team == user_team else team,
+          "獲得選手": p_name,
+          "区分": p_row["区分"] if p_row is not None else "",
+          "守備": p_row["守備位置"] if p_row is not None else "",
+          "評価": p_row["評価"] if p_row is not None else "",
+      })
+
+    st.table(pd.DataFrame(final_result_list))
