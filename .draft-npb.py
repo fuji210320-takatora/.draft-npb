@@ -330,6 +330,12 @@ INITIAL_PRESETS = {
     }
 }
 
+# 指定の基準指名順（楽天 → 広島 → オリックス → 中日 → ロッテ → ヤクルト → 日本ハム → DeNA → 西武 → 巨人 → ソフトバンク → 阪神）
+ORDER_BASE = [
+    "楽天", "広島", "オリックス", "中日", "ロッテ", "ヤクルト",
+    "日本ハム", "DeNA", "西武", "巨人", "ソフトバンク", "阪神"
+]
+
 # --- 3. データ読み込み ---
 SHEET_ID = "1Qd_GNT-V0Ololma_QpIAhgEzLSFXlsv8sMG99espI90"
 csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
@@ -345,7 +351,7 @@ def load_data(url):
 df_raw = load_data(csv_url)
 
 if df_raw is not None:
-    npb_teams = list(INITIAL_PRESETS.keys())
+    npb_teams = ORDER_BASE
 
     if "current_screen" not in st.session_state:
         st.session_state.current_screen = "設定画面"
@@ -458,21 +464,7 @@ if df_raw is not None:
             return f"{name}（{team_str}{info['pos']}）"
         return name
 
-    # ★ 思考方針アルゴリズム：
-    # 1. 1位・2位はB+以上（基礎スコア80点以上）優先
-    # 2. ポジション減衰ルール：
-    #    - 投手：1人指名ごとに-0.075累積減衰
-    #    - 捕手：1人でも指名したら捕手係数はすべて「0.88」固定
-    #    - 内野手：1人指名で-0.10、2人指名で-0.25、3人以上指名で-0.35
-    #    - 外野手：1人指名で-0.10、2人指名で-0.25、3人以上指名で-0.35
-    # 3. 3位以降：未指名ポジション（投・捕・内・外）は係数1.05倍
-    # 4. 4位以降：独立リーグ選手は係数1.10倍
-    # 5. 【★最新・1位限定重複回避システム】：
-    #    - 1番手（計算値トップ）：5/10 (50%)
-    #    - 2番手：3/10 (30%)
-    #    - 3番手：1/10 (10%)
-    #    - 4番手〜6番手：残りの1/10 (10%) を均等割り
-    # 6. 2位以下の指名時（従来どおり）：トップ7/10、次点〜8番目3/10
+    # ★ 思考方針アルゴリズム
     def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
@@ -486,7 +478,6 @@ if df_raw is not None:
 
         w = st.session_state.team_weights[team_name]
         
-        # 獲得済み選手のポジション別カウント
         picked_counts = {"投": 0, "捕": 0, "内": 0, "外": 0}
         for r in range(1, round_num):
             picked_p = st.session_state.draft_picks[team_name].get(r)
@@ -500,7 +491,6 @@ if df_raw is not None:
             cat = row["カテゴリ"]
             base_coeff = w.get(cat, 1.0)
             
-            # ポジション別減衰計算
             if m_pos == "投":
                 base_coeff -= (picked_counts["投"] * 0.075)
             elif m_pos == "捕":
@@ -523,15 +513,13 @@ if df_raw is not None:
                 elif cnt >= 3:
                     base_coeff -= 0.35
 
-            base_coeff = max(base_coeff, 0.1)  # 負値防止
+            base_coeff = max(base_coeff, 0.1)
             score = row["基礎スコア"] * base_coeff
             
-            # 3位以降：未指名ポジションなら1.05倍
             if round_num >= 3:
                 if m_pos in ["投", "捕", "内", "外"] and (picked_counts[m_pos] == 0):
                     score *= 1.05
                     
-            # 4位以降：独立リーグ選手なら1.10倍
             if round_num >= 4:
                 if str(cat).startswith("独") or ("独" in str(row["区分"])):
                     score *= 1.10
@@ -541,33 +529,23 @@ if df_raw is not None:
         target_pool["score"] = target_pool.apply(calc_score, axis=1)
         target_pool = target_pool.sort_values(by="score", ascending=False).reset_index(drop=True)
 
-        # ==========================================
-        # 【一巡目限定：新・重複回避システム】
-        # 1番手: 50%, 2番手: 30%, 3番手: 10%, 4〜6番手: 10%
-        # ==========================================
+        # 一巡目限定：重複回避システム（1番手50%, 2番手30%, 3番手10%, 4〜6番手10%均等）
         if round_num == 1:
             n_pool = len(target_pool)
             if n_pool == 1:
                 return target_pool.iloc[0]["氏名"]
 
-            rand_val = random.random()  # 0.0 〜 1.0
+            rand_val = random.random()
 
-            # 1番手: 5/10 (0.00 〜 0.50)
             if rand_val < 0.50:
                 return target_pool.iloc[0]["氏名"]
-            
-            # 2番手: 3/10 (0.50 〜 0.80)
             elif rand_val < 0.80:
                 return target_pool.iloc[1]["氏名"]
-            
-            # 3番手: 1/10 (0.80 〜 0.90)
             elif rand_val < 0.90:
                 if n_pool >= 3:
                     return target_pool.iloc[2]["氏名"]
                 else:
                     return target_pool.iloc[1]["氏名"]
-            
-            # 4番手〜6番手: 残りの1/10 (0.90 〜 1.00) を均等割り
             else:
                 if n_pool >= 6:
                     group_4_6 = target_pool.iloc[3:6]
@@ -580,10 +558,7 @@ if df_raw is not None:
                 else:
                     return target_pool.iloc[1]["氏名"]
 
-        # ==========================================
-        # 【2巡目以降：従来どおり】
-        # トップ: 70%, 次点〜8番目: 30%
-        # ==========================================
+        # 2巡目以降：トップ70%, 次点〜8番目30%
         else:
             top_player = target_pool.iloc[0]["氏名"]
             sub_cands = target_pool.iloc[1:8]
@@ -719,7 +694,7 @@ if df_raw is not None:
                 header_msg = f"{r1_title}。他球団の入札を開始します"
         elif phase == "r1_reveal_bids":
             header_badge = f"{r1_title}・開票中"
-            header_msg = f"下の球団から順番に{r1_title}選手を開票中……"
+            header_msg = f"各球団の{r1_title}選手を順番に開票中……"
         elif phase == "r1_confirm_bids":
             header_badge = f"{r1_title}・開票完了"
             header_msg = f"{r1_title}の結果が出揃いました。抽選を行ってください"
@@ -865,7 +840,7 @@ if df_raw is not None:
                         key=f"sel_r1_{s_rnd}"
                     )
 
-                    if st.button(f"この選手を{r1_title}する（下の球団から開票へ）", type="primary", use_container_width=True):
+                    if st.button(f"この選手を{r1_title}する（開票へ）", type="primary", use_container_width=True):
                         bids = {user_team: user_pick}
                         for t in st.session_state.r1_active_teams:
                             if t == user_team:
@@ -873,26 +848,27 @@ if df_raw is not None:
                             bids[t] = pick_ai_player(t, avail_pool, round_num=1)
 
                         st.session_state.r1_current_bids = bids
-                        st.session_state.r1_reveal_order = list(reversed(st.session_state.r1_active_teams))
+                        # 1位開票順：指定基準順（楽天→広島→...→阪神）
+                        st.session_state.r1_reveal_order = [t for t in ORDER_BASE if t in st.session_state.r1_active_teams]
                         st.session_state.r1_reveal_idx = 0
                         st.session_state.r1_revealed_bids = {}
                         st.session_state.draft_phase = "r1_reveal_bids"
                         st.rerun()
             else:
                 st.info(f"{user_team}は1位指名獲得済みです。未確定球団による{r1_title}の開票を開始します。")
-                if st.button(f"{r1_title}の開票を開始する（下の球団から）", type="primary", use_container_width=True):
+                if st.button(f"{r1_title}の開票を開始する", type="primary", use_container_width=True):
                     bids = {}
                     for t in st.session_state.r1_active_teams:
                         bids[t] = pick_ai_player(t, avail_pool, round_num=1)
 
                     st.session_state.r1_current_bids = bids
-                    st.session_state.r1_reveal_order = list(reversed(st.session_state.r1_active_teams))
+                    st.session_state.r1_reveal_order = [t for t in ORDER_BASE if t in st.session_state.r1_active_teams]
                     st.session_state.r1_reveal_idx = 0
                     st.session_state.r1_revealed_bids = {}
                     st.session_state.draft_phase = "r1_reveal_bids"
                     st.rerun()
 
-        # 1位の順次開票フェーズ
+        # 1位の順次開票フェーズ（楽天→...→阪神の順に開票アナウンス）
         elif phase == "r1_reveal_bids":
             reveal_order = st.session_state.r1_reveal_order
             r_idx = st.session_state.r1_reveal_idx
@@ -972,10 +948,12 @@ if df_raw is not None:
 
         # ----------------------------------------------------
         # 2巡目以降（ウェーバー自動シーケンス進行）
+        # 偶数巡目（2,4,6,8,10）: 楽天 → 広島 → ... → 阪神
+        # 奇数巡目（3,5,7,9）: 阪神 → ソフトバンク → ... → 楽天
         # ----------------------------------------------------
         elif phase == "round_progress":
             c_rnd = st.session_state.current_round
-            order = list(reversed(npb_teams)) if c_rnd % 2 == 0 else npb_teams
+            order = ORDER_BASE if c_rnd % 2 == 0 else list(reversed(ORDER_BASE))
             w_idx = st.session_state.weber_index
 
             if w_idx < len(order):
