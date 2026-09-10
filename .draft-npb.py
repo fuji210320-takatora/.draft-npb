@@ -192,6 +192,7 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
     color: #111827 !important;
     border-bottom: 1px solid #f2eee6 !important;
     background-color: #ffffff !important;
+    vertical-align: middle !important;
 }
 .board-table tr.user-row td {
     background-color: #fbf5e6 !important;
@@ -216,6 +217,14 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
 .val-picked {
     font-weight: 700 !important;
     color: #111827 !important;
+    line-height: 1.25 !important;
+}
+.val-sub {
+    font-size: 11px !important;
+    color: #6b7280 !important;
+    font-weight: normal !important;
+    display: block !important;
+    margin-top: 1px !important;
 }
 
 .card-competing {
@@ -348,7 +357,6 @@ if df_raw is not None:
     if "max_rounds" not in st.session_state:
         st.session_state.max_rounds = 7
 
-    # 12球団の初期設定プリセットをロード
     if "team_weights" not in st.session_state:
         st.session_state.team_weights = {
             t: dict(INITIAL_PRESETS[t]) for t in npb_teams
@@ -394,19 +402,32 @@ if df_raw is not None:
 
     df["カテゴリ"] = df.apply(get_cat, axis=1)
 
-    # 評価点マッピング（B+は74点）
     score_dict = {"S": 97, "A": 85, "A-": 79, "B+": 74, "B": 70, "B-": 66, "C+": 60, "C": 55, "C-": 50}
     df["基礎スコア"] = df["評価"].astype(str).str.strip().map(score_dict).fillna(45)
 
-    # ★ 思考ロジック関数
-    # 1. 1位・2位（round_num <= 2）は「基礎スコア >= 74 (B+以上)」から優先選出。存在しない（枯渇した）場合は全体から選出。
-    # 2. 対象プールの中で「最高スコアから5点以内」の選手たちの中からランダム選出。
+    # ★ 選手情報の辞書（所属と守備位置のみ）
+    player_dict = {}
+    for _, r in df.iterrows():
+        name = str(r["氏名"]).strip()
+        player_dict[name] = {
+            "team": str(r.get("学校・チーム", "")).strip(),
+            "pos": str(r.get("守備位置", "")).strip(),
+            "kbn": str(r.get("区分", "")).strip()
+        }
+
+    # 表示用フォーマット：氏名（所属・守備位置）※評価は完全除外
+    def format_player_label(name):
+        info = player_dict.get(name)
+        if info:
+            team_str = f"{info['team']}・" if info['team'] else ""
+            return f"{name}（{team_str}{info['pos']}）"
+        return name
+
+    # 思考ロジック関数（1・2位はB+優先、5点以内ランダム）
     def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
-        
         target_pool = pool_df.copy()
-        # 1位・2位はB+以上優先
         if round_num <= 2:
             b_plus_cands = target_pool[target_pool["基礎スコア"] >= 74]
             if len(b_plus_cands) > 0:
@@ -414,9 +435,7 @@ if df_raw is not None:
 
         w = st.session_state.team_weights[team_name]
         target_pool["score"] = target_pool["基礎スコア"] * target_pool["カテゴリ"].map(lambda c: w.get(c, 1.0))
-        
         max_score = target_pool["score"].max()
-        # 5点以内の候補群からランダム選出
         top_cands = target_pool[target_pool["score"] >= (max_score - 5.0)]
         chosen_name = top_cands.sample(n=1).iloc[0]["氏名"]
         return chosen_name
@@ -566,7 +585,7 @@ if df_raw is not None:
 </div>
 </div>""", unsafe_allow_html=True)
 
-        # 指名ボード
+        # 指名ボード（氏名 + 所属・守備位置）
         table_rows = []
         for t in npb_teams:
             is_u = (t == user_team)
@@ -577,16 +596,27 @@ if df_raw is not None:
             p1 = t_picks.get(1, "—")
             p2 = t_picks.get(2, "—")
             
-            p1_cls = "val-picked" if p1 != "—" else "val-empty"
-            p2_cls = "val-picked" if p2 != "—" else "val-empty"
+            if p1 != "—":
+                info1 = player_dict.get(p1, {})
+                t_sub1 = f"{info1.get('team', '')}・{info1.get('pos', '')}" if info1 else ""
+                p1_cell = f'<span class="val-picked">{p1}</span><span class="val-sub">{t_sub1}</span>'
+            else:
+                p1_cell = '<span class="val-empty">—</span>'
+
+            if p2 != "—":
+                info2 = player_dict.get(p2, {})
+                t_sub2 = f"{info2.get('team', '')}・{info2.get('pos', '')}" if info2 else ""
+                p2_cell = f'<span class="val-picked">{p2}</span><span class="val-sub">{t_sub2}</span>'
+            else:
+                p2_cell = '<span class="val-empty">—</span>'
 
             row_html = f"""<tr{tr_class}>
-<td style="width: 32%;">
+<td style="width: 30%;">
 <span class="team-name">{t}</span>
 <span class="team-cnt">{cnt}/{max_r}</span>
 </td>
-<td style="width: 34%;" class="{p1_cls}">{p1}</td>
-<td style="width: 34%;" class="{p2_cls}">{p2}</td>
+<td style="width: 35%;">{p1_cell}</td>
+<td style="width: 35%;">{p2_cell}</td>
 </tr>"""
             table_rows.append(row_html)
 
@@ -615,42 +645,66 @@ if df_raw is not None:
         avail_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
         sorted_pool = avail_pool.sort_values(by="基礎スコア", ascending=False)
 
+        # 絞り込み用ユニークリスト
+        all_kbns = ["すべて"] + sorted(list(df["区分"].dropna().unique()))
+        all_poss = ["すべて"] + sorted(list(df["守備位置"].dropna().unique()))
+
         # 1. 1位入札フェーズ
         if phase == "r1_input":
             st.markdown("#### 🎯 1位入札選手の選択")
-            user_pick = st.selectbox(f"{user_team}の1位入札選手を選択", sorted_pool["氏名"].tolist(), key="sel_r1")
             
-            if st.button("この選手を1位入札する", type="primary", use_container_width=True):
-                bids = {user_team: user_pick}
-                for t in npb_teams:
-                    if t == user_team:
-                        continue
-                    # 1位思考ロジック（B+以上優先、5点以内ランダム）
-                    bids[t] = pick_ai_player(t, avail_pool, round_num=1)
+            # 絞り込みUI
+            col_f1, col_f2 = st.columns(2)
+            sel_kbn = col_f1.selectbox("区分で絞り込み", all_kbns, key="f_kbn_r1")
+            sel_pos = col_f2.selectbox("守備位置で絞り込み", all_poss, key="f_pos_r1")
 
-                p_bids = {}
-                for t, p in bids.items():
-                    p_bids.setdefault(p, []).append(t)
+            filtered_pool = sorted_pool.copy()
+            if sel_kbn != "すべて":
+                filtered_pool = filtered_pool[filtered_pool["区分"] == sel_kbn]
+            if sel_pos != "すべて":
+                filtered_pool = filtered_pool[filtered_pool["守備位置"] == sel_pos]
 
-                st.session_state.r1_bids = bids
-                st.session_state.r1_competing = p_bids
-                st.session_state.draft_phase = "r1_confirm_bids"
-                st.rerun()
+            if len(filtered_pool) == 0:
+                st.warning("条件に該当する指名可能な選手がいません。条件を変更してください。")
+            else:
+                user_pick = st.selectbox(
+                    f"{user_team}の1位入札選手を選択",
+                    filtered_pool["氏名"].tolist(),
+                    format_func=format_player_label,
+                    key="sel_r1"
+                )
+                
+                if st.button("この選手を1位入札する", type="primary", use_container_width=True):
+                    bids = {user_team: user_pick}
+                    for t in npb_teams:
+                        if t == user_team:
+                            continue
+                        bids[t] = pick_ai_player(t, avail_pool, round_num=1)
+
+                    p_bids = {}
+                    for t, p in bids.items():
+                        p_bids.setdefault(p, []).append(t)
+
+                    st.session_state.r1_bids = bids
+                    st.session_state.r1_competing = p_bids
+                    st.session_state.draft_phase = "r1_confirm_bids"
+                    st.rerun()
 
         # 2. 抽選フェーズ
         elif phase == "r1_confirm_bids":
             st.markdown("#### 📢 1位入札の競合状況")
             for p, teams in st.session_state.r1_competing.items():
+                p_label = format_player_label(p)
                 if len(teams) > 1:
                     t_str = "、".join(teams)
                     st.markdown(f"""<div class="card-competing">
 <span>🔥</span>
-<div><strong>{p}</strong> に {len(teams)}球団が競合！（{t_str}）</div>
+<div><strong>{p_label}</strong> に {len(teams)}球団が競合！（{t_str}）</div>
 </div>""", unsafe_allow_html=True)
                 else:
                     st.markdown(f"""<div class="card-single">
 <span>✅</span>
-<div><strong>{p}</strong>: {teams[0]} が単独指名！</div>
+<div><strong>{p_label}</strong>: {teams[0]} が単独指名！</div>
 </div>""", unsafe_allow_html=True)
 
             if st.button("🎲 運命の抽選くじを引く！", type="primary", use_container_width=True):
@@ -676,7 +730,6 @@ if df_raw is not None:
                 if user_team in losers:
                     st.session_state.draft_phase = "r1_hature_user"
                 else:
-                    # AI球団の外れ1位処理（B+以上優先、5点以内ランダム）
                     rem = df[~df["氏名"].isin(st.session_state.already_drafted)].copy()
                     for lt in losers:
                         if len(rem) > 0:
@@ -697,32 +750,48 @@ if df_raw is not None:
         elif phase == "r1_hature_user":
             st.error(f"抽選の結果、{user_team}は外れました。外れ1位の指名選手を選択してください。")
             rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
-            hature_pick = st.selectbox(
-                f"{user_team}の外れ1位指名",
-                rem_pool.sort_values(by="基礎スコア", ascending=False)["氏名"].tolist(),
-                key="sel_hature"
-            )
+            sorted_rem = rem_pool.sort_values(by="基礎スコア", ascending=False)
 
-            if st.button("外れ1位指名を確定する", type="primary", use_container_width=True):
-                st.session_state.draft_picks[user_team][1] = hature_pick
-                st.session_state.already_drafted.add(hature_pick)
-                st.session_state.loser_teams.remove(user_team)
+            col_f1, col_f2 = st.columns(2)
+            sel_kbn = col_f1.selectbox("区分で絞り込み", all_kbns, key="f_kbn_hature")
+            sel_pos = col_f2.selectbox("守備位置で絞り込み", all_poss, key="f_pos_hature")
 
-                rem = df[~df["氏名"].isin(st.session_state.already_drafted)].copy()
-                for lt in st.session_state.loser_teams:
-                    if len(rem) > 0:
-                        ch = pick_ai_player(lt, rem, round_num=1)
-                        st.session_state.draft_picks[lt][1] = ch
-                        st.session_state.already_drafted.add(ch)
-                        rem = rem[rem["氏名"] != ch]
+            filtered_rem = sorted_rem.copy()
+            if sel_kbn != "すべて":
+                filtered_rem = filtered_rem[filtered_rem["区分"] == sel_kbn]
+            if sel_pos != "すべて":
+                filtered_rem = filtered_rem[filtered_rem["守備位置"] == sel_pos]
 
-                if max_r >= 2:
-                    st.session_state.draft_phase = "round_progress"
-                    st.session_state.current_round = 2
-                    st.session_state.weber_index = 0
-                else:
-                    st.session_state.draft_phase = "finished"
-                st.rerun()
+            if len(filtered_rem) == 0:
+                st.warning("条件に該当する指名可能な選手がいません。条件を変更してください。")
+            else:
+                hature_pick = st.selectbox(
+                    f"{user_team}の外れ1位指名",
+                    filtered_rem["氏名"].tolist(),
+                    format_func=format_player_label,
+                    key="sel_hature"
+                )
+
+                if st.button("外れ1位指名を確定する", type="primary", use_container_width=True):
+                    st.session_state.draft_picks[user_team][1] = hature_pick
+                    st.session_state.already_drafted.add(hature_pick)
+                    st.session_state.loser_teams.remove(user_team)
+
+                    rem = df[~df["氏名"].isin(st.session_state.already_drafted)].copy()
+                    for lt in st.session_state.loser_teams:
+                        if len(rem) > 0:
+                            ch = pick_ai_player(lt, rem, round_num=1)
+                            st.session_state.draft_picks[lt][1] = ch
+                            st.session_state.already_drafted.add(ch)
+                            rem = rem[rem["氏名"] != ch]
+
+                    if max_r >= 2:
+                        st.session_state.draft_phase = "round_progress"
+                        st.session_state.current_round = 2
+                        st.session_state.weber_index = 0
+                    else:
+                        st.session_state.draft_phase = "finished"
+                    st.rerun()
 
         # 4. 2巡目以降のウェーバー指名
         elif phase == "round_progress":
@@ -738,20 +807,33 @@ if df_raw is not None:
                 sorted_rem = rem_pool.sort_values(by="基礎スコア", ascending=False)
 
                 if now_team == user_team:
-                    u_choice = st.selectbox(
-                        f"{user_team}の第{c_rnd}位指名選手を選択",
-                        sorted_rem["氏名"].tolist(),
-                        key=f"rnd_pick_{c_rnd}_{w_idx}"
-                    )
-                    if st.button("この選手を指名する", type="primary", use_container_width=True):
-                        st.session_state.draft_picks[user_team][c_rnd] = u_choice
-                        st.session_state.already_drafted.add(u_choice)
-                        st.session_state.weber_index += 1
-                        st.rerun()
+                    col_f1, col_f2 = st.columns(2)
+                    sel_kbn = col_f1.selectbox("区分で絞り込み", all_kbns, key=f"f_kbn_{c_rnd}_{w_idx}")
+                    sel_pos = col_f2.selectbox("守備位置で絞り込み", all_poss, key=f"f_pos_{c_rnd}_{w_idx}")
+
+                    filtered_rem = sorted_rem.copy()
+                    if sel_kbn != "すべて":
+                        filtered_rem = filtered_rem[filtered_rem["区分"] == sel_kbn]
+                    if sel_pos != "すべて":
+                        filtered_rem = filtered_rem[filtered_rem["守備位置"] == sel_pos]
+
+                    if len(filtered_rem) == 0:
+                        st.warning("条件に該当する指名可能な選手がいません。条件を変更してください。")
+                    else:
+                        u_choice = st.selectbox(
+                            f"{user_team}の第{c_rnd}位指名選手を選択",
+                            filtered_rem["氏名"].tolist(),
+                            format_func=format_player_label,
+                            key=f"rnd_pick_{c_rnd}_{w_idx}"
+                        )
+                        if st.button("この選手を指名する", type="primary", use_container_width=True):
+                            st.session_state.draft_picks[user_team][c_rnd] = u_choice
+                            st.session_state.already_drafted.add(u_choice)
+                            st.session_state.weber_index += 1
+                            st.rerun()
                 else:
                     st.write(f"{now_team}の指名番です。")
                     if st.button(f"{now_team} の指名を行う（次へ）", type="secondary", use_container_width=True):
-                        # round_numを渡して2位ならB+以上優先を適用
                         ch = pick_ai_player(now_team, rem_pool, round_num=c_rnd)
                         st.session_state.draft_picks[now_team][c_rnd] = ch
                         st.session_state.already_drafted.add(ch)
