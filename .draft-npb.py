@@ -1,4 +1,5 @@
 import random
+import time
 import pandas as pd
 import streamlit as st
 
@@ -350,6 +351,9 @@ if df_raw is not None:
     if "max_rounds" not in st.session_state:
         st.session_state.max_rounds = 7
 
+    if "sim_speed" not in st.session_state:
+        st.session_state.sim_speed = "標準"
+
     if "team_weights" not in st.session_state:
         st.session_state.team_weights = {
             t: dict(INITIAL_PRESETS[t]) for t in npb_teams
@@ -361,13 +365,13 @@ if df_raw is not None:
         st.session_state.draft_picks = {t: {} for t in npb_teams}
         st.session_state.already_drafted = set()
         
-        # 1位指名用の詳細ステート
-        st.session_state.r1_sub_round = 1  # 1: 第1回入札, 2: 外れ1位, 3: 外れ外れ1位...
-        st.session_state.r1_active_teams = list(npb_teams)  # まだ1位が決まっていない球団リスト
-        st.session_state.r1_current_bids = {}  # 今回の入札辞書 {team: player}
-        st.session_state.r1_competitions = {}  # 競合辞書 {player: [teams]}
+        # 1位指名用ステート
+        st.session_state.r1_sub_round = 1
+        st.session_state.r1_active_teams = list(npb_teams)
+        st.session_state.r1_current_bids = {}
+        st.session_state.r1_competitions = {}
         
-        # 2巡目以降
+        # 2巡目以降用ステート
         st.session_state.current_round = 2
         st.session_state.weber_index = 0
 
@@ -404,7 +408,6 @@ if df_raw is not None:
     score_dict = {"S": 97, "A": 85, "A-": 79, "B+": 74, "B": 70, "B-": 66, "C+": 60, "C": 55, "C-": 50}
     df["基礎スコア"] = df["評価"].astype(str).str.strip().map(score_dict).fillna(45)
 
-    # 選手情報の辞書（所属と守備位置のみ）
     player_dict = {}
     for _, r in df.iterrows():
         name = str(r["氏名"]).strip()
@@ -421,7 +424,7 @@ if df_raw is not None:
             return f"{name}（{team_str}{info['pos']}）"
         return name
 
-    # 思考ロジック（1・2位はB+優先、5点以内ランダム選出）
+    # 思考ロジック（1・2位はB+優先、5点以内ランダム）
     def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
@@ -529,7 +532,7 @@ if df_raw is not None:
         max_r = st.session_state.max_rounds
         s_rnd = st.session_state.r1_sub_round
 
-        # 1位の名称バッジ（第1回入札、外れ1位、外れ外れ1位...）
+        # 1位の名称バッジ
         if s_rnd == 1:
             r1_title = "1位・第1回入札"
         elif s_rnd == 2:
@@ -568,8 +571,21 @@ if df_raw is not None:
 </div>
 </div>""", unsafe_allow_html=True)
 
-        # --- B. ステータスバー ---
+        # --- B. ステータスバー（進行速度セレクター連動） ---
         picked_count = len(st.session_state.draft_picks[user_team])
+        col_st1, col_st2 = st.columns([2, 1])
+        
+        # 進行速度ラジオボタン（横並び）
+        speed_opts = ["じっくり", "標準", "高速", "自分まで"]
+        selected_speed = st.radio(
+            "⏱ 進行速度",
+            speed_opts,
+            index=speed_opts.index(st.session_state.sim_speed),
+            horizontal=True,
+            key="speed_selector"
+        )
+        st.session_state.sim_speed = selected_speed
+
         st.markdown(f"""<div class="status-container">
 <div class="status-left">
 <div>
@@ -582,20 +598,19 @@ if df_raw is not None:
 </div>
 </div>
 <div>
-<div class="status-label" style="margin-bottom: 4px;">⏱ 進行状況</div>
-<div style="font-size:13px; font-weight:700; color:#eab308;">
-{"1位指名 入札・抽選中" if "r1" in phase else f"第{st.session_state.current_round}巡目 進行中"}
+<div class="status-label" style="margin-bottom: 4px;">⏱ 現在のフェーズ</div>
+<div style="font-size:14px; font-weight:800; color:#eab308;">
+{"1位指名 入札・抽選中" if "r1" in phase else (f"第{st.session_state.current_round}巡目 進行中" if phase == "round_progress" else "全日程終了")}
 </div>
 </div>
 </div>""", unsafe_allow_html=True)
 
-        # --- C. 12球団・全指名ボード（完全横スクロール対応 & 設定巡数まで全列展開） ---
+        # --- C. 12球団・全指名ボード（横スクロール & 全巡表示） ---
         st.markdown(f"""<div class="board-header">
 <div>👁 12球団・全指名ボード</div>
 <div style="color: #f87171; font-size: 11px; font-weight: 800;"><span style="display:inline-block; width:8px; height:8px; background:#ef4444; border-radius:50%; margin-right:4px;"></span>LIVE</div>
 </div>""", unsafe_allow_html=True)
 
-        # テーブルヘッダーの生成（1位〜設定最大巡数まで）
         th_cols = "".join([f"<th style='min-width: 140px;'>{r}位</th>" for r in range(1, max_r + 1)])
 
         table_rows = []
@@ -605,7 +620,6 @@ if df_raw is not None:
             t_picks = st.session_state.draft_picks[t]
             cnt = len(t_picks)
 
-            # 各巡目のセル生成
             cells_html = ""
             for r in range(1, max_r + 1):
                 p_name = t_picks.get(r)
@@ -648,12 +662,11 @@ if df_raw is not None:
         all_poss = ["すべて"] + sorted(list(df["守備位置"].dropna().unique()))
 
         # ----------------------------------------------------
-        # 1位指名フェーズ（全球団確定するまで外れ入札・抽選ループ）
+        # 1位指名フェーズ（外れ入札・抽選ループ）
         # ----------------------------------------------------
         if phase == "r1_input":
             st.markdown(f"#### 🎯 {r1_title}（指名対象球団: {len(st.session_state.r1_active_teams)}球団）")
 
-            # ユーザー球団がまだ1位未確定の場合、ユーザーに選ばせる
             if user_team in st.session_state.r1_active_teams:
                 col_f1, col_f2 = st.columns(2)
                 sel_kbn = col_f1.selectbox("区分で絞り込み", all_kbns, key=f"f_kbn_r1_{s_rnd}")
@@ -676,14 +689,12 @@ if df_raw is not None:
                     )
 
                     if st.button(f"この選手を{r1_title}する", type="primary", use_container_width=True):
-                        # 参加球団全員の入札を決める
                         bids = {user_team: user_pick}
                         for t in st.session_state.r1_active_teams:
                             if t == user_team:
                                 continue
                             bids[t] = pick_ai_player(t, avail_pool, round_num=1)
 
-                        # 競合判定
                         p_bids = {}
                         for t, p in bids.items():
                             p_bids.setdefault(p, []).append(t)
@@ -693,7 +704,6 @@ if df_raw is not None:
                         st.session_state.draft_phase = "r1_confirm_bids"
                         st.rerun()
             else:
-                # ユーザー球団は既に1位決定済み。残りの他球団だけで入札を実施
                 st.info(f"{user_team}は既に1位指名が確定しています。残りの未確定球団による{r1_title}を実行します。")
                 if st.button(f"{r1_title}の入札を開票する", type="primary", use_container_width=True):
                     bids = {}
@@ -709,7 +719,6 @@ if df_raw is not None:
                     st.session_state.draft_phase = "r1_confirm_bids"
                     st.rerun()
 
-        # 1位の抽選フェーズ
         elif phase == "r1_confirm_bids":
             st.markdown(f"#### 📢 {r1_title}の入札結果")
 
@@ -743,13 +752,11 @@ if df_raw is not None:
                             if loser != winner:
                                 next_losers.append(loser)
 
-                # まだ確定していない球団がいる場合、次の外れ入札へ
                 if len(next_losers) > 0:
                     st.session_state.r1_active_teams = next_losers
                     st.session_state.r1_sub_round += 1
                     st.session_state.draft_phase = "r1_input"
                 else:
-                    # 全12球団の1位が確定！
                     st.session_state.r1_active_teams = []
                     if max_r >= 2:
                         st.session_state.draft_phase = "round_progress"
@@ -760,22 +767,22 @@ if df_raw is not None:
                 st.rerun()
 
         # ----------------------------------------------------
-        # 2巡目以降（ウェーバー指名：1球団ずつ順に進行）
+        # 2巡目以降（ウェーバー自動シーケンス進行）
         # ----------------------------------------------------
         elif phase == "round_progress":
             c_rnd = st.session_state.current_round
-            # 偶数巡目は逆順、奇数巡目は正順
             order = list(reversed(npb_teams)) if c_rnd % 2 == 0 else npb_teams
             w_idx = st.session_state.weber_index
 
             if w_idx < len(order):
                 now_team = order[w_idx]
-                st.markdown(f"#### 選択権： **{now_team}** （第{c_rnd}巡目 第{w_idx+1}指名）")
 
-                rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
-                sorted_rem = rem_pool.sort_values(by="基礎スコア", ascending=False)
-
+                # ユーザーの番が来たらピタッと止まって選択待ち
                 if now_team == user_team:
+                    st.markdown(f"#### 🎯 選択権： **{now_team}（あなた）** （第{c_rnd}巡目 第{w_idx+1}指名）")
+                    rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
+                    sorted_rem = rem_pool.sort_values(by="基礎スコア", ascending=False)
+
                     col_f1, col_f2 = st.columns(2)
                     sel_kbn = col_f1.selectbox("区分で絞り込み", all_kbns, key=f"f_kbn_{c_rnd}_{w_idx}")
                     sel_pos = col_f2.selectbox("守備位置で絞り込み", all_poss, key=f"f_pos_{c_rnd}_{w_idx}")
@@ -800,24 +807,39 @@ if df_raw is not None:
                             st.session_state.already_drafted.add(u_choice)
                             st.session_state.weber_index += 1
                             st.rerun()
+
+                # AI球団の番：自動で指名して1球団ずつテンポよく進む！
                 else:
-                    st.write(f"**{now_team}** の指名番です。")
-                    if st.button(f"{now_team} の指名を行う（次へ）", type="secondary", use_container_width=True):
-                        ch = pick_ai_player(now_team, rem_pool, round_num=c_rnd)
-                        st.session_state.draft_picks[now_team][c_rnd] = ch
-                        st.session_state.already_drafted.add(ch)
-                        st.session_state.weber_index += 1
-                        st.rerun()
+                    st.info(f"🎙️ 第{c_rnd}巡目 第{w_idx+1}指名: **{now_team}** の選択希望選手を指名中……")
+                    
+                    # 速度に応じた待機ディレイ
+                    speed_map = {"じっくり": 1.4, "標準": 0.75, "高速": 0.25, "自分まで": 0.02}
+                    delay = speed_map.get(st.session_state.sim_speed, 0.75)
+                    time.sleep(delay)
+
+                    # 指名ロジック適用
+                    rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
+                    ch = pick_ai_player(now_team, rem_pool, round_num=c_rnd)
+                    st.session_state.draft_picks[now_team][c_rnd] = ch
+                    st.session_state.already_drafted.add(ch)
+                    st.session_state.weber_index += 1
+                    st.rerun()
+
             else:
-                st.success(f"🎉 第{c_rnd}巡目の指名が完了しました！")
+                # この巡目が12球団すべて終了
+                st.success(f"🎉 第{c_rnd}巡目の指名がすべて終了しました！")
                 if c_rnd < max_r:
-                    if st.button(f"➡️ 第{c_rnd+1}巡目へ進む", type="primary", use_container_width=True):
+                    if st.button(f"➡️ 第{c_rnd+1}巡目の指名を開始する", type="primary", use_container_width=True):
                         st.session_state.current_round += 1
                         st.session_state.weber_index = 0
                         st.rerun()
                 else:
                     st.balloons()
                     st.success("🏆 全指名枠のドラフト会議がすべて終了しました！")
+
+        elif phase == "finished":
+            st.balloons()
+            st.success("🏆 全日程のドラフト会議が終了しました！お疲れ様でした！")
 
         st.write("---")
         if st.button("⚙️ 設定画面に戻る（最初からやり直す）", use_container_width=True):
