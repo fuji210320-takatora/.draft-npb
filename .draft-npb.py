@@ -414,30 +414,27 @@ if df_raw is not None:
 
     df["メイン守備"] = df["守備位置"].apply(get_main_pos)
     df["カテゴリ"] = df.apply(get_cat, axis=1)
-    
-score_dict = {
-    "S": 97,
-    "A+": 93,
-    "A": 89,
-    "A-": 83,
-    "B+": 80,
-    "B": 73,
-    "B-": 69,
-    "C+": 64,
-    "C": 58,
-    "C-": 55,
-}
 
+    # 評価スコア配点
+    score_dict = {
+        "S": 97,
+        "A+": 93,
+        "A": 89,
+        "A-": 83,
+        "B+": 80,
+        "B": 73,
+        "B-": 69,
+        "C+": 64,
+        "C": 58,
+        "C-": 55
+    }
 
-def parse_score(val):
-  s = str(val).strip()
-  # まず数値（整数・小数）に変換できるか試す
-  try:
-    return float(s)
-  except ValueError:
-    # 数値でなければアルファベット換算辞書を参照
-    return float(score_dict.get(s, 50.0))
-
+    def parse_score(val):
+        s = str(val).strip()
+        try:
+            return float(s)
+        except ValueError:
+            return float(score_dict.get(s, 50.0))
 
     df["基礎スコア"] = df["評価"].apply(parse_score)
 
@@ -451,7 +448,7 @@ def parse_score(val):
             "kbn": str(r.get("区分", "")).strip(),
             "cat": str(r.get("カテゴリ", "他")).strip(),
             "rank": str(r.get("評価", "")).strip(),
-            "base_score": float(r.get("基礎スコア", 50))
+            "base_score": float(r.get("基礎スコア", 50.0))
         }
 
     def format_player_label(name):
@@ -461,7 +458,12 @@ def parse_score(val):
             return f"{name}（{team_str}{info['pos']}）"
         return name
 
-    # 思考方針アルゴリズム（10点以内6:4、重複回避7:3、2位以下7:3、ポジションバランス、4位以降独立1.1倍）
+    # ★ 思考方針アルゴリズム：
+    # 1. 1位・2位はB+以上（基礎スコア80点以上）優先
+    # 2. ポジションバランス（3位以降）：未指名メイン守備（投・捕・内・外）は係数1.05倍
+    # 3. 4位以降：独立リーグ選手（独投・独捕・独内・独外）は係数1.1倍
+    # 4. 1位指名時：10点以内候補ありならトップ6/10、他全候補4/10。いなければ重複回避（最高アルファベット評価なら7:3で次点）
+    # 5. 2位以下の指名時：トップ7/10、次点〜8番目3/10
     def pick_ai_player(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
@@ -485,12 +487,10 @@ def parse_score(val):
         def calc_score(row):
             base = row["基礎スコア"] * w.get(row["カテゴリ"], 1.0)
             
-            # 3位以降：ポジションバランス（未指名ポジションなら1.05倍）
             if round_num >= 3:
                 if row["メイン守備"] in ["投", "捕", "内", "外"] and (row["メイン守備"] not in already_positions):
                     base *= 1.05
                     
-            # 4位以降：独立リーグ選手なら1.1倍
             if round_num >= 4:
                 if str(row["カテゴリ"]).startswith("独") or ("独" in str(row["区分"])):
                     base *= 1.10
@@ -830,7 +830,7 @@ def parse_score(val):
                     st.session_state.draft_phase = "r1_reveal_bids"
                     st.rerun()
 
-        # 1位の順次開票フェーズ（下の球団から順に開票アナウンス）
+        # 1位の順次開票フェーズ
         elif phase == "r1_reveal_bids":
             reveal_order = st.session_state.r1_reveal_order
             r_idx = st.session_state.r1_reveal_idx
