@@ -1,29 +1,32 @@
+import os
 import random
 import time
 import pandas as pd
 import streamlit as st
+from google import genai
+from google.genai import types
 
 st.set_page_config(
-    page_title="NPB ドラフトシミュレーター",
+    page_title="NPB ドラフトシミュレーター (AI思考版)",
     page_icon="⚾",
     layout="centered"
 )
 
+# --- APIクライアント初期化 ---
+# ※ st.secrets["GEMINI_API_KEY"] または環境変数から自動取得
+api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
+client = genai.Client(api_key=api_key) if api_key else None
+
 # --- 1. スタイル定義（横スクロール対応 & コントラスト固定） ---
 st.markdown("""<style>
-/* ベース背景 */
 html, body, [data-testid="stAppViewContainer"], .stApp {
     background-color: #f6f5f1 !important;
     color: #111827 !important;
 }
-
-/* 見出しと通常テキスト固定 */
 h1, h2, h3, h4, h5, h6,
 .stMarkdown p, [data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] span {
     color: #111827 !important;
 }
-
-/* プライマリボタン（赤） */
 button[kind="primary"], button[data-testid="baseButton-primary"] {
     background-color: #a91e2c !important;
     border-color: #a91e2c !important;
@@ -32,8 +35,6 @@ button[kind="primary"] *, button[data-testid="baseButton-primary"] * {
     color: #ffffff !important;
     font-weight: 700 !important;
 }
-
-/* セカンダリボタン（白） */
 button[kind="secondary"], button[data-testid="baseButton-secondary"] {
     background-color: #ffffff !important;
     border: 1px solid #d1d5db !important;
@@ -42,13 +43,6 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
     color: #111827 !important;
     font-weight: 700 !important;
 }
-
-/* スライダー */
-[data-testid="stSlider"] label, [data-testid="stSlider"] div {
-    color: #111827 !important;
-}
-
-/* 上部カード */
 .otc-container {
     background-color: #ffffff !important;
     border-radius: 16px !important;
@@ -105,8 +99,6 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
     margin: 0 !important;
     line-height: 1.3 !important;
 }
-
-/* ステータスバー */
 .status-container {
     background-color: #172a3a !important;
     border-radius: 10px !important;
@@ -134,8 +126,6 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
     color: #ffffff !important;
     line-height: 1 !important;
 }
-
-/* 12球団 全指名ボード */
 .board-header {
     background-color: #172a3a !important;
     color: #ffffff !important;
@@ -150,8 +140,6 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
 .board-header * {
     color: #ffffff !important;
 }
-
-/* 横スクロールラッパー */
 .table-scroll-container {
     width: 100% !important;
     overflow-x: auto !important;
@@ -163,7 +151,6 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
     background: #ffffff !important;
     margin-bottom: 16px !important;
 }
-
 .board-table {
     width: 100% !important;
     border-collapse: collapse !important;
@@ -225,7 +212,6 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
     display: block !important;
     margin-top: 1px !important;
 }
-
 .card-competing {
     background-color: #fefce8 !important;
     border: 1.5px solid #facc15 !important;
@@ -254,80 +240,20 @@ button[kind="secondary"] *, button[data-testid="baseButton-secondary"] * {
 }
 </style>""", unsafe_allow_html=True)
 
-# --- 2. 12球団の最新初期設定プリセットデータ ---
+# --- 2. 12球団の初期設定プリセット ---
 INITIAL_PRESETS = {
-    "阪神": {
-        "高投": 1.0, "高捕": 1.05, "高内": 1.2, "高外": 1.05,
-        "大投": 1.2, "大捕": 1.4, "大内": 1.2, "大外": 1.05,
-        "社投": 0.9, "社捕": 1.0, "社内": 1.05, "社外": 0.85,
-        "独投": 0.95, "独捕": 1.1, "独内": 1.0, "独外": 0.85, "他": 1.0
-    },
-    "DeNA": {
-        "高投": 1.25, "高捕": 0.95, "高内": 1.05, "高外": 1.1,
-        "大投": 1.25, "大捕": 0.9, "大内": 1.0, "大外": 1.1,
-        "社投": 0.95, "社捕": 1.0, "社内": 1.05, "社外": 1.1,
-        "独投": 0.9, "独捕": 0.8, "独内": 0.9, "独外": 0.85, "他": 1.0
-    },
-    "巨人": {
-        "高投": 1.2, "高捕": 0.95, "高内": 1.0, "高外": 1.1,
-        "大投": 1.2, "大捕": 0.85, "大内": 1.1, "大外": 1.25,
-        "社投": 1.05, "社捕": 0.8, "社内": 1.0, "社外": 1.1,
-        "独投": 0.85, "独捕": 0.7, "独内": 0.8, "独外": 0.9, "他": 1.0
-    },
-    "中日": {
-        "高投": 1.1, "高捕": 1.05, "高内": 1.05, "高外": 1.1,
-        "大投": 1.3, "大捕": 0.8, "大内": 0.95, "大外": 1.2,
-        "社投": 1.1, "社捕": 0.6, "社内": 0.9, "社外": 1.1,
-        "独投": 1.0, "独捕": 0.8, "独内": 0.8, "独外": 1.0, "他": 1.0
-    },
-    "広島": {
-        "高投": 0.85, "高捕": 1.0, "高内": 1.0, "高外": 0.95,
-        "大投": 1.28, "大捕": 1.3, "大内": 1.15, "大外": 0.9,
-        "社投": 1.0, "社捕": 1.05, "社内": 1.0, "社外": 0.9,
-        "独投": 0.9, "独捕": 0.9, "独内": 1.0, "独外": 1.05, "他": 1.0
-    },
-    "ヤクルト": {
-        "高投": 1.05, "高捕": 0.9, "高内": 1.2, "高外": 1.2,
-        "大投": 1.35, "大捕": 0.9, "大内": 1.15, "大外": 1.15,
-        "社投": 1.2, "社捕": 0.7, "社内": 1.05, "社外": 1.1,
-        "独投": 1.0, "独捕": 0.6, "独内": 0.85, "独外": 0.95, "他": 1.0
-    },
-    "ソフトバンク": {
-        "高投": 1.3, "高捕": 1.05, "高内": 1.1, "高外": 1.1,
-        "大投": 1.1, "大捕": 0.8, "大内": 0.8, "大外": 0.95,
-        "社投": 0.8, "社捕": 0.75, "社内": 0.75, "社外": 0.8,
-        "独投": 0.95, "独捕": 0.7, "独内": 0.7, "独外": 0.8, "他": 1.0
-    },
-    "日本ハム": {
-        "高投": 1.15, "高捕": 1.1, "高内": 1.0, "高外": 1.0,
-        "大投": 1.25, "大捕": 0.9, "大内": 1.15, "大外": 1.1,
-        "社投": 1.0, "社捕": 0.85, "社内": 1.0, "社外": 1.0,
-        "独投": 0.9, "独捕": 0.8, "独内": 1.0, "独外": 1.0, "他": 1.0
-    },
-    "オリックス": {
-        "高投": 1.25, "高捕": 1.0, "高内": 1.1, "高外": 1.1,
-        "大投": 1.25, "大捕": 1.1, "大内": 1.0, "大外": 1.0,
-        "社投": 1.15, "社捕": 0.8, "社内": 0.9, "社外": 0.9,
-        "独投": 1.1, "独捕": 0.7, "独内": 0.8, "独外": 0.85, "他": 1.0
-    },
-    "楽天": {
-        "高投": 1.15, "高捕": 1.0, "高内": 1.2, "高外": 1.1,
-        "大投": 1.2, "大捕": 0.85, "大内": 1.1, "大外": 1.05,
-        "社投": 1.1, "社捕": 0.85, "社内": 1.05, "社外": 1.0,
-        "独投": 1.05, "独捕": 0.8, "独内": 0.9, "独外": 0.85, "他": 1.0
-    },
-    "西武": {
-        "高投": 1.3, "高捕": 0.9, "高内": 1.1, "高外": 1.15,
-        "大投": 1.2, "大捕": 0.8, "大内": 1.05, "大外": 1.05,
-        "社投": 1.1, "社捕": 0.8, "社内": 1.0, "社外": 1.0,
-        "独投": 1.05, "独捕": 0.7, "独内": 0.8, "独外": 0.9, "他": 1.0
-    },
-    "ロッテ": {
-        "高投": 1.2, "高捕": 1.05, "高内": 1.1, "高外": 1.1,
-        "大投": 1.2, "大捕": 0.9, "大内": 0.85, "大外": 1.0,
-        "社投": 0.95, "社捕": 0.85, "社内": 1.0, "社外": 0.8,
-        "独投": 1.0, "独捕": 0.75, "独内": 0.85, "独外": 0.85, "他": 1.0
-    }
+    "阪神": {"高投": 1.0, "高捕": 1.05, "高内": 1.2, "高外": 1.05, "大投": 1.2, "大捕": 1.4, "大内": 1.2, "大外": 1.05, "社投": 0.9, "社捕": 1.0, "社内": 1.05, "社外": 0.85, "独投": 0.95, "独捕": 1.1, "独内": 1.0, "独外": 0.85, "他": 1.0},
+    "DeNA": {"高投": 1.25, "高捕": 0.95, "高内": 1.05, "高外": 1.1, "大投": 1.25, "大捕": 0.9, "大内": 1.0, "大外": 1.1, "社投": 0.95, "社捕": 1.0, "社内": 1.05, "社外": 1.1, "独投": 0.9, "独捕": 0.8, "独内": 0.9, "独外": 0.85, "他": 1.0},
+    "巨人": {"高投": 1.2, "高捕": 0.95, "高内": 1.0, "高外": 1.1, "大投": 1.2, "大捕": 0.85, "大内": 1.1, "大外": 1.25, "社投": 1.05, "社捕": 0.8, "社内": 1.0, "社外": 1.1, "独投": 0.85, "独捕": 0.7, "独内": 0.8, "独外": 0.9, "他": 1.0},
+    "中日": {"高投": 1.1, "高捕": 1.05, "高内": 1.05, "高外": 1.1, "大投": 1.3, "大捕": 0.8, "大内": 0.95, "大外": 1.2, "社投": 1.1, "社捕": 0.6, "社内": 0.9, "社外": 1.1, "独投": 1.0, "独捕": 0.8, "独内": 0.8, "独外": 1.0, "他": 1.0},
+    "広島": {"高投": 0.85, "高捕": 1.0, "高内": 1.0, "高外": 0.95, "大投": 1.28, "大捕": 1.3, "大内": 1.15, "大外": 0.9, "社投": 1.0, "社捕": 1.05, "社内": 1.0, "社外": 0.9, "独投": 0.9, "独捕": 0.9, "独内": 1.0, "独外": 1.05, "他": 1.0},
+    "ヤクルト": {"高投": 1.05, "高捕": 0.9, "高内": 1.2, "高外": 1.2, "大投": 1.35, "大捕": 0.9, "大内": 1.15, "大外": 1.15, "社投": 1.2, "社捕": 0.7, "社内": 1.05, "社外": 1.1, "独投": 1.0, "独捕": 0.6, "独内": 0.85, "独外": 0.95, "他": 1.0},
+    "ソフトバンク": {"高投": 1.3, "高捕": 1.05, "高内": 1.1, "高外": 1.1, "大投": 1.1, "大捕": 0.8, "大内": 0.8, "大外": 0.95, "社投": 0.8, "社捕": 0.75, "社内": 0.75, "社外": 0.8, "独投": 0.95, "独捕": 0.7, "独内": 0.7, "独外": 0.8, "他": 1.0},
+    "日本ハム": {"高投": 1.15, "高捕": 1.1, "高内": 1.0, "高外": 1.0, "大投": 1.25, "大捕": 0.9, "大内": 1.15, "大外": 1.1, "社投": 1.0, "社捕": 0.85, "社内": 1.0, "社外": 1.0, "独投": 0.9, "独捕": 0.8, "独内": 1.0, "独外": 1.0, "他": 1.0},
+    "オリックス": {"高投": 1.25, "高捕": 1.0, "高内": 1.1, "高外": 1.1, "大投": 1.25, "大捕": 1.1, "大内": 1.0, "大外": 1.0, "社投": 1.15, "社捕": 0.8, "社内": 0.9, "社外": 0.9, "独投": 1.1, "独捕": 0.7, "独内": 0.8, "独外": 0.85, "他": 1.0},
+    "楽天": {"高投": 1.15, "高捕": 1.0, "高内": 1.2, "高外": 1.1, "大投": 1.2, "大捕": 0.85, "大内": 1.1, "大外": 1.05, "社投": 1.1, "社捕": 0.85, "社内": 1.05, "社外": 1.0, "独投": 1.05, "独捕": 0.8, "独内": 0.9, "独外": 0.85, "他": 1.0},
+    "西武": {"高投": 1.3, "高捕": 0.9, "高内": 1.1, "高外": 1.15, "大投": 1.2, "大捕": 0.8, "大内": 1.05, "大外": 1.05, "社投": 1.1, "社捕": 0.8, "社内": 1.0, "社外": 1.0, "独投": 1.05, "独捕": 0.7, "独内": 0.8, "独外": 0.9, "他": 1.0},
+    "ロッテ": {"高投": 1.2, "高捕": 1.05, "高内": 1.1, "高外": 1.1, "大投": 1.2, "大捕": 0.9, "大内": 0.85, "大外": 1.0, "社投": 0.95, "社捕": 0.85, "社内": 1.0, "社外": 0.8, "独投": 1.0, "独捕": 0.75, "独内": 0.85, "独外": 0.85, "他": 1.0}
 }
 
 ORDER_BASE = [
@@ -335,7 +261,6 @@ ORDER_BASE = [
     "日本ハム", "DeNA", "西武", "巨人", "ソフトバンク", "阪神"
 ]
 
-# --- 3. データ読み込み ---
 SHEET_ID = "1Qd_GNT-V0Ololma_QpIAhgEzLSFXlsv8sMG99espI90"
 csv_url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv"
 
@@ -354,39 +279,28 @@ if df_raw is not None:
 
     if "current_screen" not in st.session_state:
         st.session_state.current_screen = "設定画面"
-
     if "user_team" not in st.session_state:
         st.session_state.user_team = "阪神"
-
     if "max_rounds" not in st.session_state:
         st.session_state.max_rounds = 7
-
     if "sim_speed" not in st.session_state:
         st.session_state.sim_speed = "標準"
-
     if "auto_mode" not in st.session_state:
         st.session_state.auto_mode = False
-
     if "team_weights" not in st.session_state:
-        st.session_state.team_weights = {
-            t: dict(INITIAL_PRESETS[t]) for t in npb_teams
-        }
+        st.session_state.team_weights = {t: dict(INITIAL_PRESETS[t]) for t in npb_teams}
 
-    # ドラフト進行管理ステート
     if "draft_phase" not in st.session_state:
         st.session_state.draft_phase = "r1_input"
         st.session_state.draft_picks = {t: {} for t in npb_teams}
         st.session_state.already_drafted = set()
-        
         st.session_state.r1_sub_round = 1
         st.session_state.r1_active_teams = list(npb_teams)
         st.session_state.r1_current_bids = {}
         st.session_state.r1_competitions = {}
-        
         st.session_state.r1_reveal_order = []
         st.session_state.r1_reveal_idx = 0
         st.session_state.r1_revealed_bids = {}
-        
         st.session_state.current_round = 2
         st.session_state.weber_index = 0
 
@@ -394,31 +308,16 @@ if df_raw is not None:
 
     def get_main_pos(pos_str):
         p = str(pos_str)
-        if "投" in p:
-            return "投"
-        elif "捕" in p:
-            return "捕"
-        elif "内" in p:
-            return "内"
-        elif "外" in p:
-            return "外"
+        if "投" in p: return "投"
+        elif "捕" in p: return "捕"
+        elif "内" in p: return "内"
+        elif "外" in p: return "外"
         return "他"
 
     def get_cat(row):
         kbn = str(row["区分"])
-        if "高" in kbn:
-            pfx = "高"
-        elif "大" in kbn:
-            pfx = "大"
-        elif "独立" in kbn or "独" in kbn:
-            pfx = "独"
-        elif any(x in kbn for x in ["社", "社会人", "クラブ"]):
-            pfx = "社"
-        else:
-            pfx = "他"
-
-        sfx = get_main_pos(row["守備位置"])
-        return pfx + sfx
+        pfx = "高" if "高" in kbn else ("大" if "大" in kbn else ("独" if ("独立" in kbn or "独" in kbn) else ("社" if any(x in kbn for x in ["社", "社会人", "クラブ"]) else "他")))
+        return pfx + get_main_pos(row["守備位置"])
 
     df["メイン守備"] = df["守備位置"].apply(get_main_pos)
     df["カテゴリ"] = df.apply(get_cat, axis=1)
@@ -454,69 +353,113 @@ if df_raw is not None:
         info = player_dict.get(name)
         if info:
             team_str = f"{info['team']}・" if info['team'] else ""
-            return f"{name}（{team_str}{info['pos']}）"
+            return f"選手名: {name}（評価: {info['rank']}, 所属区分: {info['kbn']}, 守備: {info['pos']}）"
         return name
 
-    # ★ 思考方針アルゴリズム
-    def pick_ai_player(team_name, pool_df, round_num=1):
+    # ==========================================
+    # ★ Gemini API を使った純粋なAI思考による指名関数
+    # ==========================================
+    def pick_ai_player_by_gemini(team_name, pool_df, round_num=1):
         if len(pool_df) == 0:
             return None
         
-        target_pool = pool_df.copy()
-        
-        if round_num <= 2:
-            b_plus_cands = target_pool[target_pool["基礎スコア"] >= 80]
-            if len(b_plus_cands) > 0:
-                target_pool = b_plus_cands
+        # APIキーがない場合は従来のロジックにフォールバック
+        if not client:
+            return pick_ai_player_fallback(team_name, pool_df, round_num)
 
-        w = st.session_state.team_weights[team_name]
-        
+        # チームの獲得済み選手状況をまとめる
+        already_picked_str = ""
         picked_counts = {"投": 0, "捕": 0, "内": 0, "外": 0}
         for r in range(1, round_num):
-            picked_p = st.session_state.draft_picks[team_name].get(r)
-            if picked_p and picked_p in player_dict:
-                m_pos = player_dict[picked_p]["main_pos"]
-                if m_pos in picked_counts:
-                    picked_counts[m_pos] += 1
+            p = st.session_state.draft_picks[team_name].get(r)
+            if p and p in player_dict:
+                m = player_dict[p]["main_pos"]
+                if m in picked_counts: picked_counts[m] += 1
+                already_picked_str += f"- {r}位: {p}（{player_dict[p]['pos']}）\n"
+
+        # 上位候補のリストを作成してテキスト化（最大30名に絞ってプロンプトのトークンを節約）
+        top_cands = pool_df.sort_values(by="基礎スコア", ascending=False).head(30)
+        cands_text = ""
+        for _, r in top_cands.iterrows():
+            cands_text += f"- {r['氏名']} (評価:{r['評価']}, 区分:{r['区分']}, 守備:{r['守備位置']}, 所属:{r['学校・チーム']})\n"
+
+        w = st.session_state.team_weights[team_name]
+        w_text = ", ".join([f"{k}:{v}" for k, v in w.items()])
+
+        prompt = f"""
+あなたはプロ野球「{team_name}」のスカウト会議・編成責任者です。
+ドラフト第{round_num}巡目の指名選手を1名選んでください。
+
+【チームの補強方針・係数特性】
+{w_text}
+
+【これまでの指名選手】
+{already_picked_str if already_picked_str else "なし"}
+
+【現在指名可能な選手プール（上位候補）】
+{cands_text}
+
+【ルール】
+- 1位および2位は戦力評価の高い選手（評価S〜B+相当）を優先してください。
+- 捕手を既に獲得している場合は捕手の評価を下げ、まだ指名していない主要ポジションやバランスを考慮してください。
+- 4位以降は独立リーグ等も検討してください。
+- 出力は必ず「選択する選手の氏名（文字列そのもの）」のみを返してください。余計な解説やコメントは一切含めないでください。
+"""
+
+        try:
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+            )
+            chosen_name = response.text.strip()
+            # リストの中に名前が含まれているか検証、一致しなければフォールバックへ
+            matching = top_cands[top_cands["氏名"].str.contains(chosen_name, na=False)]
+            if len(matching) > 0:
+                return matching.iloc[0]["氏名"]
+            else:
+                return pool_df.iloc[0]["氏名"]
+        except Exception:
+            return pick_ai_player_fallback(team_name, pool_df, round_num)
+
+    # 従来の計算・確率ベースのフォールバック関数
+    def pick_ai_player_fallback(team_name, pool_df, round_num=1):
+        if len(pool_df) == 0: return None
+        target_pool = pool_df.copy()
+        if round_num <= 2:
+            b_plus = target_pool[target_pool["基礎スコア"] >= 80]
+            if len(b_plus) > 0: target_pool = b_plus
+
+        w = st.session_state.team_weights[team_name]
+        picked_counts = {"投": 0, "捕": 0, "内": 0, "外": 0}
+        for r in range(1, round_num):
+            p = st.session_state.draft_picks[team_name].get(r)
+            if p and p in player_dict:
+                m = player_dict[p]["main_pos"]
+                if m in picked_counts: picked_counts[m] += 1
 
         def calc_score(row):
             m_pos = row["メイン守備"]
             cat = row["カテゴリ"]
             base_coeff = w.get(cat, 1.0)
-            
-            if m_pos == "投":
-                base_coeff -= (picked_counts["投"] * 0.075)
-            elif m_pos == "捕":
-                if picked_counts["捕"] >= 1:
-                    base_coeff = 0.88
+            if m_pos == "投": base_coeff -= (picked_counts["投"] * 0.075)
+            elif m_pos == "捕": 
+                if picked_counts["捕"] >= 1: base_coeff = 0.88
             elif m_pos == "内":
                 cnt = picked_counts["内"]
-                if cnt == 1:
-                    base_coeff -= 0.10
-                elif cnt == 2:
-                    base_coeff -= 0.25
-                elif cnt >= 3:
-                    base_coeff -= 0.35
+                if cnt == 1: base_coeff -= 0.10
+                elif cnt == 2: base_coeff -= 0.25
+                elif cnt >= 3: base_coeff -= 0.35
             elif m_pos == "外":
                 cnt = picked_counts["外"]
-                if cnt == 1:
-                    base_coeff -= 0.10
-                elif cnt == 2:
-                    base_coeff -= 0.25
-                elif cnt >= 3:
-                    base_coeff -= 0.35
-
+                if cnt == 1: base_coeff -= 0.10
+                elif cnt == 2: base_coeff -= 0.25
+                elif cnt >= 3: base_coeff -= 0.35
             base_coeff = max(base_coeff, 0.1)
             score = row["基礎スコア"] * base_coeff
-            
-            if round_num >= 3:
-                if m_pos in ["投", "捕", "内", "外"] and (picked_counts[m_pos] == 0):
-                    score *= 1.05
-                    
-            if round_num >= 4:
-                if str(cat).startswith("独") or ("独" in str(row["区分"])):
-                    score *= 1.10
-                    
+            if round_num >= 3 and m_pos in ["投", "捕", "内", "外"] and picked_counts[m_pos] == 0:
+                score *= 1.05
+            if round_num >= 4 and (str(cat).startswith("独") or "独" in str(row["区分"])):
+                score *= 1.10
             return score
 
         target_pool["score"] = target_pool.apply(calc_score, axis=1)
@@ -524,50 +467,28 @@ if df_raw is not None:
 
         if round_num == 1:
             n_pool = len(target_pool)
-            if n_pool == 1:
-                return target_pool.iloc[0]["氏名"]
-
-            rand_val = random.random()
-            if rand_val < 0.50:
-                return target_pool.iloc[0]["氏名"]
-            elif rand_val < 0.80:
-                return target_pool.iloc[1]["氏名"]
-            elif rand_val < 0.90:
-                if n_pool >= 3:
-                    return target_pool.iloc[2]["氏名"]
-                else:
-                    return target_pool.iloc[1]["氏名"]
-            else:
-                if n_pool >= 6:
-                    return target_pool.iloc[3:6].sample(n=1).iloc[0]["氏名"]
-                elif n_pool >= 4:
-                    return target_pool.iloc[3:n_pool].sample(n=1).iloc[0]["氏名"]
-                elif n_pool >= 3:
-                    return target_pool.iloc[2]["氏名"]
-                else:
-                    return target_pool.iloc[1]["氏名"]
+            if n_pool == 1: return target_pool.iloc[0]["氏名"]
+            r_val = random.random()
+            if r_val < 0.50: return target_pool.iloc[0]["氏名"]
+            elif r_val < 0.80: return target_pool.iloc[1]["氏名"]
+            elif r_val < 0.90: return target_pool.iloc[2]["氏名"] if n_pool >= 3 else target_pool.iloc[1]["氏名"]
+            else: return target_pool.iloc[3:min(6, n_pool)].sample(n=1).iloc[0]["氏名"] if n_pool >= 4 else target_pool.iloc[0]["氏名"]
         else:
-            top_player = target_pool.iloc[0]["氏名"]
-            sub_cands = target_pool.iloc[1:8]
-            if len(sub_cands) > 0:
-                if random.random() < 0.70:
-                    return top_player
-                else:
-                    return sub_cands.sample(n=1).iloc[0]["氏名"]
-            else:
-                return top_player
+            top_p = target_pool.iloc[0]["氏名"]
+            sub = target_pool.iloc[1:8]
+            return top_p if (len(sub) == 0 or random.random() < 0.70) else sub.sample(n=1).iloc[0]["氏名"]
 
-    speed_map = {
-        "じっくり": 2.2,
-        "標準": 1.4,
-        "高速": 0.6,
-        "自分まで": 0.05
-    }
+    # AI選択のメイン呼び出し
+    def pick_ai_player(team_name, pool_df, round_num=1):
+        if client:
+            return pick_ai_player_by_gemini(team_name, pool_df, round_num)
+        else:
+            return pick_ai_player_fallback(team_name, pool_df, round_num)
 
-    # サイドバー切り替え
+    speed_map = {"じっくり": 2.2, "標準": 1.4, "高速": 0.6, "自分まで": 0.05}
+
     screen_choice = st.sidebar.radio(
-        "画面切り替え",
-        ["⚙️ 初期設定", "🏟️ ドラフト会場"],
+        "画面切り替え", ["⚙️ 初期設定", "🏟️ ドラフト会場"],
         index=0 if st.session_state.current_screen == "設定画面" else 1
     )
     st.session_state.current_screen = "設定画面" if screen_choice == "⚙️ 初期設定" else "ドラフト会場"
@@ -578,76 +499,51 @@ if df_raw is not None:
     if st.session_state.current_screen == "設定画面":
         st.markdown("## ⚙️ ドラフト初期設定")
         st.write("操作球団、指名人数、各球団の好みを設定します。")
+        if not client:
+            st.warning("⚠️ `GEMINI_API_KEY` が設定されていないため、確率・計算ベースのAIロジックで動作します。")
 
         st.markdown("### 1. 操作する球団を選ぶ")
         selected_user_team = st.selectbox(
-            "あなたの担当球団",
-            npb_teams,
+            "あなたの担当球団", npb_teams,
             index=npb_teams.index(st.session_state.user_team)
         )
         st.session_state.user_team = selected_user_team
 
         st.markdown("### 2. 指名枠数・進行モードの設定")
-        st.session_state.max_rounds = st.slider(
-            "各球団の最大指名人数（巡数）",
-            min_value=1, max_value=10,
-            value=st.session_state.max_rounds, step=1
-        )
-        
-        # 全自動モードのスイッチ
-        st.session_state.auto_mode = st.checkbox(
-            "🤖 全自動シミュレーションモード（あなたの球団も含めAIが全て自動で指名して進めます）",
-            value=st.session_state.auto_mode
-        )
+        st.session_state.max_rounds = st.slider("各球団の最大指名人数（巡数）", 1, 10, st.session_state.max_rounds, 1)
+        st.session_state.auto_mode = st.checkbox("🤖 全自動シミュレーションモード", value=st.session_state.auto_mode)
 
         st.divider()
-
         st.markdown("### 3. 各球団のカテゴリ別係数設定")
-        slider_mode = st.selectbox(
-            "球団係数の設定方法",
-            ["初期プリセットのまま使用する（推奨）", "手動で調整・確認する"],
-            index=0,
-            key="slider_mode_select"
-        )
+        slider_mode = st.selectbox("球団係数の設定方法", ["初期プリセットのまま使用する（推奨）", "手動で調整・確認する"], index=0)
 
         if slider_mode == "手動で調整・確認する":
-            edit_team = st.selectbox(
-                "係数を調整する球団を選択",
-                npb_teams,
-                index=npb_teams.index(st.session_state.user_team),
-                key="tune_team_select"
-            )
-            
-            st.write(f"**{edit_team} の補正係数**")
+            edit_team = st.selectbox("係数を調整する球団を選択", npb_teams, index=npb_teams.index(st.session_state.user_team))
             w = st.session_state.team_weights[edit_team]
-            
             st.caption("高校生")
             c1, c2, c3, c4 = st.columns(4)
-            w["高投"] = c1.slider("高投", 0.0, 2.0, float(w.get("高投", 1.0)), 0.01, key=f"s_{edit_team}_高投")
-            w["高捕"] = c2.slider("高捕", 0.0, 2.0, float(w.get("高捕", 1.0)), 0.01, key=f"s_{edit_team}_高捕")
-            w["高内"] = c3.slider("高内", 0.0, 2.0, float(w.get("高内", 1.0)), 0.01, key=f"s_{edit_team}_高内")
-            w["高外"] = c4.slider("高外", 0.0, 2.0, float(w.get("高外", 1.0)), 0.01, key=f"s_{edit_team}_高外")
-
+            w["高投"] = c1.slider("高投", 0.0, 2.0, float(w.get("高投", 1.0)), 0.01)
+            w["高捕"] = c2.slider("高捕", 0.0, 2.0, float(w.get("高捕", 1.0)), 0.01)
+            w["高内"] = c3.slider("高内", 0.0, 2.0, float(w.get("高内", 1.0)), 0.01)
+            w["高外"] = c4.slider("高外", 0.0, 2.0, float(w.get("高外", 1.0)), 0.01)
             st.caption("大学生")
             c5, c6, c7, c8 = st.columns(4)
-            w["大投"] = c5.slider("大投", 0.0, 2.0, float(w.get("大投", 1.0)), 0.01, key=f"s_{edit_team}_大投")
-            w["大捕"] = c6.slider("大捕", 0.0, 2.0, float(w.get("大捕", 1.0)), 0.01, key=f"s_{edit_team}_大捕")
-            w["大内"] = c7.slider("大内", 0.0, 2.0, float(w.get("大内", 1.0)), 0.01, key=f"s_{edit_team}_大内")
-            w["大外"] = c8.slider("大外", 0.0, 2.0, float(w.get("大外", 1.0)), 0.01, key=f"s_{edit_team}_大外")
-
+            w["大投"] = c5.slider("大投", 0.0, 2.0, float(w.get("大投", 1.0)), 0.01)
+            w["大捕"] = c6.slider("大捕", 0.0, 2.0, float(w.get("大捕", 1.0)), 0.01)
+            w["大内"] = c7.slider("大内", 0.0, 2.0, float(w.get("大内", 1.0)), 0.01)
+            w["大外"] = c8.slider("大外", 0.0, 2.0, float(w.get("大外", 1.0)), 0.01)
             st.caption("社会人")
             c9, c10, c11, c12 = st.columns(4)
-            w["社投"] = c9.slider("社投", 0.0, 2.0, float(w.get("社投", 1.0)), 0.01, key=f"s_{edit_team}_社投")
-            w["社捕"] = c10.slider("社捕", 0.0, 2.0, float(w.get("社捕", 1.0)), 0.01, key=f"s_{edit_team}_社捕")
-            w["社内"] = c11.slider("社内", 0.0, 2.0, float(w.get("社内", 1.0)), 0.01, key=f"s_{edit_team}_社内")
-            w["社外"] = c12.slider("社外", 0.0, 2.0, float(w.get("社外", 1.0)), 0.01, key=f"s_{edit_team}_社外")
-
+            w["社投"] = c9.slider("社投", 0.0, 2.0, float(w.get("社投", 1.0)), 0.01)
+            w["社捕"] = c10.slider("社捕", 0.0, 2.0, float(w.get("社捕", 1.0)), 0.01)
+            w["社内"] = c11.slider("社内", 0.0, 2.0, float(w.get("社内", 1.0)), 0.01)
+            w["社外"] = c12.slider("社外", 0.0, 2.0, float(w.get("社外", 1.0)), 0.01)
             st.caption("独立リーグ")
             c13, c14, c15, c16 = st.columns(4)
-            w["独投"] = c13.slider("独投", 0.0, 2.0, float(w.get("独投", 1.0)), 0.01, key=f"s_{edit_team}_独投")
-            w["独捕"] = c14.slider("独捕", 0.0, 2.0, float(w.get("独捕", 1.0)), 0.01, key=f"s_{edit_team}_独捕")
-            w["独内"] = c15.slider("独内", 0.0, 2.0, float(w.get("独内", 1.0)), 0.01, key=f"s_{edit_team}_独内")
-            w["独外"] = c16.slider("独外", 0.0, 2.0, float(w.get("独外", 1.0)), 0.01, key=f"s_{edit_team}_独外")
+            w["独投"] = c13.slider("独投", 0.0, 2.0, float(w.get("独投", 1.0)), 0.01)
+            w["独捕"] = c14.slider("独捕", 0.0, 2.0, float(w.get("独捕", 1.0)), 0.01)
+            w["独内"] = c15.slider("独内", 0.0, 2.0, float(w.get("独内", 1.0)), 0.01)
+            w["独外"] = c16.slider("独外", 0.0, 2.0, float(w.get("独外", 1.0)), 0.01)
         else:
             st.caption("✅ 全12球団の初期設定プリセットが適用されています。")
 
@@ -666,148 +562,77 @@ if df_raw is not None:
         s_rnd = st.session_state.r1_sub_round
         auto_m = st.session_state.auto_mode
 
-        if s_rnd == 1:
-            r1_title = "1位・第1回入札"
-        elif s_rnd == 2:
-            r1_title = "外れ1位入札"
-        else:
-            r1_title = f"{'外れ' * (s_rnd - 1)}1位入札"
+        r1_title = "1位・第1回入札" if s_rnd == 1 else (f"外れ1位入札" if s_rnd == 2 else f"{'外れ' * (s_rnd - 1)}1位入札")
 
         if phase == "r1_input":
             header_badge = r1_title + (" (全自動)" if auto_m else "")
             header_msg = f"{r1_title}進行中"
         elif phase == "r1_reveal_bids":
             header_badge = f"{r1_title}・開票中"
-            header_msg = f"下の球団から順番に{r1_title}選手を開票中……"
+            header_msg = f"下の球団から順番に開票中……"
         elif phase == "r1_confirm_bids":
             header_badge = f"{r1_title}・抽選"
-            header_msg = f"{r1_title}の結果が出揃いました"
+            header_msg = f"結果が出揃いました"
         elif phase == "round_progress":
             c_rnd = st.session_state.current_round
             header_badge = f"{c_rnd}位指名" + (" (全自動)" if auto_m else "")
-            header_msg = f"第{c_rnd}巡目の指名を進行中"
+            header_msg = f"第{c_rnd}巡目進行中"
         else:
             header_badge = "ドラフト終了"
-            header_msg = "全日程の指名が終了しました"
+            header_msg = "全日程終了"
 
-        # --- A. ON THE CLOCK バナー ---
-        st.markdown(f"""<div class="otc-container">
-<div class="otc-flex">
-<div class="otc-icon">✦</div>
-<div>
-<div class="otc-top-row">
-<span class="otc-tag-title">ON THE CLOCK</span>
-<span class="otc-pill-badge">{header_badge}</span>
-</div>
-<div class="otc-heading">{header_msg}</div>
-</div>
-</div>
-</div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="otc-container"><div class="otc-flex"><div class="otc-icon">✦</div><div>
+        <div class="otc-top-row"><span class="otc-tag-title">ON THE CLOCK</span><span class="otc-pill-badge">{header_badge}</span></div>
+        <div class="otc-heading">{header_msg}</div></div></div></div>""", unsafe_allow_html=True)
 
-        # --- B. ステータスバー & 全自動モード切り替え ---
         col_ctrl1, col_ctrl2 = st.columns([2, 1])
-        speed_opts = ["じっくり", "標準", "高速", "自分まで"]
-        selected_speed = col_ctrl1.radio(
-            "⏱ 進行速度", speed_opts,
-            index=speed_opts.index(st.session_state.sim_speed),
-            horizontal=True, key="speed_selector"
-        )
+        selected_speed = col_ctrl1.radio("⏱ 進行速度", ["じっくり", "標準", "高速", "自分まで"], index=1, horizontal=True, key="spd")
         st.session_state.sim_speed = selected_speed
-
-        new_auto = col_ctrl2.checkbox("🤖 全自動モード", value=st.session_state.auto_mode, key="auto_mode_checkbox")
+        
+        new_auto = col_ctrl2.checkbox("🤖 全自動モード", value=st.session_state.auto_mode, key="auto_chk")
         if new_auto != st.session_state.auto_mode:
             st.session_state.auto_mode = new_auto
             st.rerun()
 
         picked_count = len(st.session_state.draft_picks[user_team])
-        st.markdown(f"""<div class="status-container">
-<div class="status-left">
-<div>
-<div class="status-label">YOUR TEAM</div>
-<div class="status-value">{user_team}</div>
-</div>
-<div>
-<div class="status-label">SELECTED</div>
-<div class="status-value">{picked_count} / {max_r}</div>
-</div>
-</div>
-<div>
-<div class="status-label" style="margin-bottom: 4px;">⏱ モード</div>
-<div style="font-size:14px; font-weight:800; color:#eab308;">
-{"🤖 全自動稼働中" if auto_m else "👤 手動・確認中"}
-</div>
-</div>
-</div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="status-container"><div class="status-left">
+        <div><div class="status-label">YOUR TEAM</div><div class="status-value">{user_team}</div></div>
+        <div><div class="status-label">SELECTED</div><div class="status-value">{picked_count} / {max_r}</div></div></div>
+        <div><div class="status-label">モード</div><div style="font-size:14px; font-weight:800; color:#eab308;">{"🤖 AI全自動稼働中" if auto_m else "👤 手動確認"}</div></div></div>""", unsafe_allow_html=True)
 
-        # --- C. 12球団・全指名ボード ---
-        st.markdown(f"""<div class="board-header">
-<div>👁 12球団・全指名ボード</div>
-<div style="color: #f87171; font-size: 11px; font-weight: 800;"><span style="display:inline-block; width:8px; height:8px; background:#ef4444; border-radius:50%; margin-right:4px;"></span>LIVE</div>
-</div>""", unsafe_allow_html=True)
-
+        # 指名ボード
+        st.markdown(f"""<div class="board-header"><div>👁 12球団・全指名ボード</div><div style="color: #f87171; font-size: 11px; font-weight: 800;">LIVE</div></div>""", unsafe_allow_html=True)
         th_cols = "".join([f"<th style='min-width: 140px;'>{r}位</th>" for r in range(1, max_r + 1)])
 
         table_rows = []
         for t in npb_teams:
-            is_u = (t == user_team)
-            tr_class = ' class="user-row"' if is_u else ""
+            tr_class = ' class="user-row"' if t == user_team else ""
             t_picks = st.session_state.draft_picks[t]
             cnt = len(t_picks)
-
             cells_html = ""
             for r in range(1, max_r + 1):
                 p_name = t_picks.get(r)
                 if r == 1 and not p_name and t in st.session_state.r1_revealed_bids:
                     temp_p = st.session_state.r1_revealed_bids[t]
                     info = player_dict.get(temp_p, {})
-                    t_sub = f"{info.get('team', '')}・{info.get('pos', '')}" if info else ""
-                    cells_html += f"<td><span class='val-temp'>入札: {temp_p}</span><span class='val-sub'>{t_sub}</span></td>"
+                    cells_html += f"<td><span class='val-temp'>入札: {temp_p}</span><span class='val-sub'>{info.get('team', '')}・{info.get('pos', '')}</span></td>"
                 elif p_name:
                     info = player_dict.get(p_name, {})
-                    t_sub = f"{info.get('team', '')}・{info.get('pos', '')}" if info else ""
-                    cells_html += f"<td><span class='val-picked'>{p_name}</span><span class='val-sub'>{t_sub}</span></td>"
+                    cells_html += f"<td><span class='val-picked'>{p_name}</span><span class='val-sub'>{info.get('team', '')}・{info.get('pos', '')}</span></td>"
                 else:
                     cells_html += "<td><span class='val-empty'>—</span></td>"
+            table_rows.append(f"<tr{tr_class}><td class='team-col' style='min-width: 110px; position: sticky; left: 0;'><span class='team-name'>{t}</span><span class='team-cnt'>{cnt}/{max_r}</span></td>{cells_html}</tr>")
 
-            row_html = f"""<tr{tr_class}>
-<td class="team-col" style="min-width: 110px; position: sticky; left: 0; z-index: 1;">
-<span class="team-name">{t}</span>
-<span class="team-cnt">{cnt}/{max_r}</span>
-</td>
-{cells_html}
-</tr>"""
-            table_rows.append(row_html)
-
-        all_rows = "\n".join(table_rows)
-
-        st.markdown(f"""<div class="table-scroll-container">
-<table class="board-table">
-<thead>
-<tr>
-<th style="min-width: 110px; position: sticky; left: 0; z-index: 2;">球団</th>
-{th_cols}
-</tr>
-</thead>
-<tbody>
-{all_rows}
-</tbody>
-</table>
-</div>""", unsafe_allow_html=True)
+        st.markdown(f"""<div class="table-scroll-container"><table class="board-table"><thead><tr><th style="min-width: 110px; position: sticky; left: 0; z-index: 2;">球団</th>{th_cols}</tr></thead><tbody>{"".join(table_rows)}</tbody></table></div>""", unsafe_allow_html=True)
 
         avail_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
         sorted_pool = avail_pool.sort_values(by="基礎スコア", ascending=False)
         all_kbns = ["すべて"] + sorted(list(df["区分"].dropna().unique()))
         all_poss = ["すべて"] + sorted(list(df["守備位置"].dropna().unique()))
 
-        # ----------------------------------------------------
-        # 1位指名フェーズ
-        # ----------------------------------------------------
         if phase == "r1_input":
-            # 全自動モードなら自分の球団もAIが自動入札
             if auto_m or (user_team not in st.session_state.r1_active_teams):
-                bids = {}
-                for t in st.session_state.r1_active_teams:
-                    bids[t] = pick_ai_player(t, avail_pool, round_num=1)
+                bids = {t: pick_ai_player(t, avail_pool, round_num=1) for t in st.session_state.r1_active_teams}
                 st.session_state.r1_current_bids = bids
                 st.session_state.r1_reveal_order = [t for t in ORDER_BASE if t in st.session_state.r1_active_teams]
                 st.session_state.r1_reveal_idx = 0
@@ -816,33 +641,19 @@ if df_raw is not None:
                 st.rerun()
 
             st.markdown(f"#### 🎯 {r1_title}（未確定: {len(st.session_state.r1_active_teams)}球団）")
-            col_f1, col_f2 = st.columns(2)
-            sel_kbn = col_f1.selectbox("区分で絞り込み", all_kbns, key=f"f_kbn_r1_{s_rnd}")
-            sel_pos = col_f2.selectbox("守備位置で絞り込み", all_poss, key=f"f_pos_r1_{s_rnd}")
+            c1, c2 = st.columns(2)
+            sel_kbn = c1.selectbox("区分", all_kbns, key="k1")
+            sel_pos = c2.selectbox("守備位置", all_poss, key="p1")
+            f_pool = sorted_pool.copy()
+            if sel_kbn != "すべて": f_pool = f_pool[f_pool["区分"] == sel_kbn]
+            if sel_pos != "すべて": f_pool = f_pool[f_pool["守備位置"] == sel_pos]
 
-            filtered_pool = sorted_pool.copy()
-            if sel_kbn != "すべて":
-                filtered_pool = filtered_pool[filtered_pool["区分"] == sel_kbn]
-            if sel_pos != "すべて":
-                filtered_pool = filtered_pool[filtered_pool["守備位置"] == sel_pos]
-
-            if len(filtered_pool) == 0:
-                st.warning("条件に該当する選手がいません。条件を変更してください。")
-            else:
-                user_pick = st.selectbox(
-                    f"{user_team}の{r1_title}選手を選択",
-                    filtered_pool["氏名"].tolist(),
-                    format_func=format_player_label,
-                    key=f"sel_r1_{s_rnd}"
-                )
-
-                if st.button(f"この選手を{r1_title}する（開票へ）", type="primary", use_container_width=True):
+            if len(f_pool) > 0:
+                user_pick = st.selectbox(f"{user_team}の1位選択", f_pool["氏名"].tolist(), format_func=format_player_label, key="up1")
+                if st.button("この選手を入札する", type="primary", use_container_width=True):
                     bids = {user_team: user_pick}
                     for t in st.session_state.r1_active_teams:
-                        if t == user_team:
-                            continue
-                        bids[t] = pick_ai_player(t, avail_pool, round_num=1)
-
+                        if t != user_team: bids[t] = pick_ai_player(t, avail_pool, round_num=1)
                     st.session_state.r1_current_bids = bids
                     st.session_state.r1_reveal_order = [t for t in ORDER_BASE if t in st.session_state.r1_active_teams]
                     st.session_state.r1_reveal_idx = 0
@@ -851,49 +662,37 @@ if df_raw is not None:
                     st.rerun()
 
         elif phase == "r1_reveal_bids":
-            reveal_order = st.session_state.r1_reveal_order
-            r_idx = st.session_state.r1_reveal_idx
-
-            if r_idx < len(reveal_order):
-                now_team = reveal_order[r_idx]
-                p_choice = st.session_state.r1_current_bids[now_team]
-                p_label = format_player_label(p_choice)
-
-                st.info(f"🎙️ 第1回選択希望選手…… **{now_team}** ： **{p_label}**")
-                st.session_state.r1_revealed_bids[now_team] = p_choice
-                
-                delay = speed_map.get(st.session_state.sim_speed, 1.4)
-                time.sleep(delay)
-
+            order = st.session_state.r1_reveal_order
+            idx = st.session_state.r1_reveal_idx
+            if idx < len(order):
+                t_name = order[idx]
+                p_choice = st.session_state.r1_current_bids[t_name]
+                st.info(f"🎙️ 第1回選択希望選手…… **{t_name}** ： **{format_player_label(p_choice)}**")
+                st.session_state.r1_revealed_bids[t_name] = p_choice
+                time.sleep(speed_map.get(st.session_state.sim_speed, 1.4))
                 st.session_state.r1_reveal_idx += 1
                 st.rerun()
             else:
                 bids = st.session_state.r1_current_bids
                 p_bids = {}
-                for t, p in bids.items():
-                    p_bids.setdefault(p, []).append(t)
-
+                for t, p in bids.items(): p_bids.setdefault(p, []).append(t)
                 st.session_state.r1_competitions = p_bids
                 st.session_state.draft_phase = "r1_confirm_bids"
                 st.rerun()
 
         elif phase == "r1_confirm_bids":
-            # 全自動モードなら自動で抽選ボタンを押して次へ
             if auto_m:
                 next_losers = []
                 for p, teams in st.session_state.r1_competitions.items():
                     if len(teams) == 1:
-                        w_team = teams[0]
-                        st.session_state.draft_picks[w_team][1] = p
+                        st.session_state.draft_picks[teams[0]][1] = p
                         st.session_state.already_drafted.add(p)
                     else:
                         winner = random.choice(teams)
                         st.session_state.draft_picks[winner][1] = p
                         st.session_state.already_drafted.add(p)
                         for loser in teams:
-                            if loser != winner:
-                                next_losers.append(loser)
-
+                            if loser != winner: next_losers.append(loser)
                 st.session_state.r1_revealed_bids = {}
                 if len(next_losers) > 0:
                     st.session_state.r1_active_teams = next_losers
@@ -909,30 +708,26 @@ if df_raw is not None:
                         st.session_state.draft_phase = "finished"
                 st.rerun()
 
-            st.markdown(f"#### 📢 {r1_title}の開票結果一覧")
+            st.markdown(f"#### 📢 {r1_title}の結果")
             for p, teams in st.session_state.r1_competitions.items():
-                p_label = format_player_label(p)
+                p_l = format_player_label(p)
                 if len(teams) > 1:
-                    t_str = "、".join(teams)
-                    st.markdown(f"""<div class="card-competing"><span>🔥</span><div><strong>{p_label}</strong> に {len(teams)}球団が競合！（{t_str}）</div></div>""", unsafe_allow_html=True)
+                    st.markdown(f"""<div class="card-competing"><span>🔥</span><div><strong>{p_l}</strong> に {len(teams)}球団競合！（{'、'.join(teams)}）</div></div>""", unsafe_allow_html=True)
                 else:
-                    st.markdown(f"""<div class="card-single"><span>✅</span><div><strong>{p_label}</strong>: {teams[0]} が単独指名！</div></div>""", unsafe_allow_html=True)
+                    st.markdown(f"""<div class="card-single"><span>✅</span><div><strong>{p_l}</strong>: {teams[0]} 単独！</div></div>""", unsafe_allow_html=True)
 
-            if st.button("🎲 抽選（くじ引き）を行い結果を確定する", type="primary", use_container_width=True):
+            if st.button("🎲 抽選を行い結果を確定する", type="primary", use_container_width=True):
                 next_losers = []
                 for p, teams in st.session_state.r1_competitions.items():
                     if len(teams) == 1:
-                        w_team = teams[0]
-                        st.session_state.draft_picks[w_team][1] = p
+                        st.session_state.draft_picks[teams[0]][1] = p
                         st.session_state.already_drafted.add(p)
                     else:
                         winner = random.choice(teams)
                         st.session_state.draft_picks[winner][1] = p
                         st.session_state.already_drafted.add(p)
                         for loser in teams:
-                            if loser != winner:
-                                next_losers.append(loser)
-
+                            if loser != winner: next_losers.append(loser)
                 st.session_state.r1_revealed_bids = {}
                 if len(next_losers) > 0:
                     st.session_state.r1_active_teams = next_losers
@@ -948,9 +743,6 @@ if df_raw is not None:
                         st.session_state.draft_phase = "finished"
                 st.rerun()
 
-        # ----------------------------------------------------
-        # 2巡目以降
-        # ----------------------------------------------------
         elif phase == "round_progress":
             c_rnd = st.session_state.current_round
             order = ORDER_BASE if c_rnd % 2 == 0 else list(reversed(ORDER_BASE))
@@ -958,31 +750,18 @@ if df_raw is not None:
 
             if w_idx < len(order):
                 now_team = order[w_idx]
-
                 if now_team == user_team and not auto_m:
-                    st.markdown(f"#### 🎯 選択権： **{now_team}（あなた）** （第{c_rnd}巡目 第{w_idx+1}指名）")
+                    st.markdown(f"#### 🎯 選択権： **{now_team}（あなた）** （第{c_rnd}巡目）")
                     rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
-                    sorted_rem = rem_pool.sort_values(by="基礎スコア", ascending=False)
+                    c1, c2 = st.columns(2)
+                    sel_kbn = c1.selectbox("区分", all_kbns, key=f"k_{c_rnd}")
+                    sel_pos = c2.selectbox("守備位置", all_poss, key=f"p_{c_rnd}")
+                    f_rem = rem_pool.copy()
+                    if sel_kbn != "subtype": f_rem = f_rem[f_rem["区分"] == sel_kbn] if sel_kbn != "すべて" else f_rem
+                    if sel_pos != "すべて": f_rem = f_rem[f_rem["守備位置"] == sel_pos]
 
-                    col_f1, col_f2 = st.columns(2)
-                    sel_kbn = col_f1.selectbox("区分で絞り込み", all_kbns, key=f"f_kbn_{c_rnd}_{w_idx}")
-                    sel_pos = col_f2.selectbox("守備位置で絞り込み", all_poss, key=f"f_pos_{c_rnd}_{w_idx}")
-
-                    filtered_rem = sorted_rem.copy()
-                    if sel_kbn != "すべて":
-                        filtered_rem = filtered_rem[filtered_rem["区分"] == sel_kbn]
-                    if sel_pos != "すべて":
-                        filtered_rem = filtered_rem[filtered_rem["守備位置"] == sel_pos]
-
-                    if len(filtered_rem) == 0:
-                        st.warning("条件に該当する指名可能な選手がいません。")
-                    else:
-                        u_choice = st.selectbox(
-                            f"{user_team}の第{c_rnd}位指名選手を選択",
-                            filtered_rem["氏名"].tolist(),
-                            format_func=format_player_label,
-                            key=f"rnd_pick_{c_rnd}_{w_idx}"
-                        )
+                    if len(f_rem) > 0:
+                        u_choice = st.selectbox("指名選手", f_rem["氏名"].tolist(), format_func=format_player_label, key=f"uc_{c_rnd}")
                         if st.button("この選手を指名する", type="primary", use_container_width=True):
                             st.session_state.draft_picks[user_team][c_rnd] = u_choice
                             st.session_state.already_drafted.add(u_choice)
@@ -992,16 +771,12 @@ if df_raw is not None:
                     delay = speed_map.get(st.session_state.sim_speed, 1.4)
                     rem_pool = df[~df["氏名"].isin(st.session_state.already_drafted)]
                     ch = pick_ai_player(now_team, rem_pool, round_num=c_rnd)
-                    ch_label = format_player_label(ch)
-
-                    st.info(f"🎙️ 第{c_rnd}巡目 第{w_idx+1}指名: **{now_team}** …… **{ch_label}**")
+                    st.info(f"🎙️ 第{c_rnd}巡目 第{w_idx+1}指名: **{now_team}** …… **{format_player_label(ch)}**")
                     time.sleep(delay)
-
                     st.session_state.draft_picks[now_team][c_rnd] = ch
                     st.session_state.already_drafted.add(ch)
                     st.session_state.weber_index += 1
                     st.rerun()
-
             else:
                 if auto_m:
                     if c_rnd < max_r:
@@ -1012,31 +787,21 @@ if df_raw is not None:
                         st.session_state.draft_phase = "finished"
                         st.rerun()
                 else:
-                    st.success(f"🎉 第{c_rnd}巡目の指名がすべて終了しました！")
+                    st.success(f"🎉 第{c_rnd}巡目終了！")
                     if c_rnd < max_r:
-                        if st.button(f"➡️ 第{c_rnd+1}巡目の指名を開始する", type="primary", use_container_width=True):
+                        if st.button(f"➡️ 第{c_rnd+1}巡目へ", type="primary", use_container_width=True):
                             st.session_state.current_round += 1
                             st.session_state.weber_index = 0
                             st.rerun()
                     else:
                         st.balloons()
-                        st.success("🏆 全指名枠のドラフト会議がすべて終了しました！")
+                        st.success("🏆 ドラフト終了！")
 
         elif phase == "finished":
             st.balloons()
-            st.success("🏆 全日程のドラフト会議が終了しました！お疲れ様でした！")
+            st.success("🏆 全日程終了！")
 
         st.write("---")
-        if st.button("⚙️ 設定画面に戻る（最初からやり直す）", use_container_width=True):
-            st.session_state.current_screen = "設定画面"
-            st.session_state.draft_phase = "r1_input"
-            st.session_state.draft_picks = {t: {} for t in npb_teams}
-            st.session_state.already_drafted = set()
-            st.session_state.r1_sub_round = 1
-            st.session_state.r1_active_teams = list(npb_teams)
-            st.session_state.r1_current_bids = {}
-            st.session_state.r1_competitions = {}
-            st.session_state.r1_reveal_order = []
-            st.session_state.r1_reveal_idx = 0
-            st.session_state.r1_revealed_bids = {}
+        if st.button("⚙️ 最初からやり直す", use_container_width=True):
+            st.session_state.clear()
             st.rerun()
